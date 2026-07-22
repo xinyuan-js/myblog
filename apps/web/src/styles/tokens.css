@@ -1,0 +1,60 @@
+:root {
+  --hue: 250;
+  --page-width: 75rem;
+  --sidebar-width: 17.5rem;
+  --radius-large: 1rem;
+  --radius-medium: 0.75rem;
+  --primary: oklch(0.7 0.14 var(--hue));
+  --primary-strong: var(--primary);
+  --page-bg: oklch(0.95 0.01 var(--hue));
+  --card-bg: white;
+  --card-muted: oklch(0.98 0.005 var(--hue));
+  --float-panel-bg: white;
+  --text-strong: rgb(0 0 0 / 0.9);
+  --text-main: rgb(0 0 0 / 0.75);
+  --text-muted: rgb(0 0 0 / 0.5);
+  --text-faint: rgb(0 0 0 / 0.3);
+  --deep-text: oklch(0.25 0.02 var(--hue));
+  --line-color: rgb(0 0 0 / 0.1);
+  --line-divider: rgb(0 0 0 / 0.08);
+  --meta-divider: rgb(0 0 0 / 0.2);
+  --button-content: oklch(0.55 0.12 var(--hue));
+  --button-bg: oklch(0.95 0.025 var(--hue));
+  --button-hover: oklch(0.9 0.05 var(--hue));
+  --button-active: oklch(0.85 0.08 var(--hue));
+  --plain-hover: oklch(0.95 0.025 var(--hue));
+  --plain-active: oklch(0.98 0.01 var(--hue));
+  --card-hover: oklch(0.98 0.005 var(--hue));
+  --card-active: oklch(0.9 0.03 var(--hue));
+  --selection-bg: oklch(0.9 0.05 var(--hue));
+  --link-underline: oklch(0.93 0.04 var(--hue));
+  --code-bg: oklch(0.17 0.015 var(--hue));
+  --shadow-float: 0 16px 42px oklch(0.2 0.04 var(--hue) / 0.12);
+}
+
+:root.dark {
+  --primary: oklch(0.75 0.14 var(--hue));
+  --primary-strong: var(--primary);
+  --page-bg: oklch(0.16 0.014 var(--hue));
+  --card-bg: oklch(0.23 0.015 var(--hue));
+  --card-muted: oklch(0.28 0.025 var(--hue));
+  --float-panel-bg: oklch(0.19 0.015 var(--hue) / 0.94);
+  --text-strong: rgb(255 255 255 / 0.9);
+  --text-main: rgb(255 255 255 / 0.75);
+  --text-muted: rgb(255 255 255 / 0.5);
+  --text-faint: rgb(255 255 255 / 0.3);
+  --line-color: rgb(255 255 255 / 0.1);
+  --line-divider: rgb(255 255 255 / 0.08);
+  --meta-divider: rgb(255 255 255 / 0.2);
+  --button-content: oklch(0.75 0.1 var(--hue));
+  --button-bg: oklch(0.33 0.035 var(--hue));
+  --button-hover: oklch(0.38 0.04 var(--hue));
+  --button-active: oklch(0.43 0.045 var(--hue));
+  --plain-hover: oklch(0.3 0.035 var(--hue));
+  --plain-active: oklch(0.27 0.025 var(--hue));
+  --card-hover: oklch(0.3 0.03 var(--hue));
+  --card-active: oklch(0.35 0.035 var(--hue));
+  --selection-bg: oklch(0.4 0.08 var(--hue));
+  --link-underline: oklch(0.4 0.08 var(--hue));
+  --shadow-float: 0 16px 42px oklch(0 0 0 / 0.28);
+}

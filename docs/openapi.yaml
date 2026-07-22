@@ -1,0 +1,819 @@
+openapi: 3.1.0
+info:
+  title: MyBlog API
+  version: 1.0.0
+  description: Vue 前端已验证的数据契约。评论接口由 Artalk 独立提供。
+servers:
+  - url: /api
+tags:
+  - name: Public
+  - name: Auth
+  - name: Admin Posts
+  - name: Admin Taxonomies
+  - name: Uploads
+paths:
+  /healthz:
+    get:
+      tags: [Public]
+      summary: 进程存活检查
+      responses:
+        '200':
+          description: 进程存活
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthResponse' }
+  /readyz:
+    get:
+      tags: [Public]
+      summary: 服务就绪检查
+      responses:
+        '200':
+          description: 依赖可用，可以接收流量
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthResponse' }
+  /site:
+    get:
+      tags: [Public]
+      summary: 获取站点公开信息
+      responses:
+        '200':
+          description: 站点信息
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteProfileResponse'
+  /posts:
+    get:
+      tags: [Public]
+      summary: 获取公开文章列表
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: tag
+          in: query
+          schema: { type: string }
+          description: 标签 Slug
+        - name: category
+          in: query
+          schema: { type: string }
+          description: 分类 Slug
+      responses:
+        '200':
+          description: 文章分页
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostPageResponse'
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /posts/{slug}:
+    get:
+      tags: [Public]
+      summary: 按 Slug 获取公开文章详情
+      parameters:
+        - $ref: '#/components/parameters/PostSlug'
+      responses:
+        '200':
+          description: 文章详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostDetailResponse'
+        '404': { $ref: '#/components/responses/NotFound' }
+  /tags:
+    get:
+      tags: [Public]
+      summary: 获取公开标签
+      responses:
+        '200':
+          description: 标签数组
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Tag' }
+  /categories:
+    get:
+      tags: [Public]
+      summary: 获取公开分类
+      responses:
+        '200':
+          description: 分类数组
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Category' }
+  /auth/github:
+    get:
+      tags: [Auth]
+      summary: 发起 GitHub OAuth
+      parameters:
+        - name: return_to
+          in: query
+          schema: { type: string, default: /admin }
+          description: 只允许站内 /admin 路径
+      responses:
+        '302': { description: 重定向到 GitHub }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /auth/github/callback:
+    get:
+      tags: [Auth]
+      summary: GitHub OAuth 回调
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema: { type: string }
+        - name: state
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '302':
+          description: 成功时建立会话并重定向 return_to；授权取消、非管理员或 state 失效时重定向 /admin/login?error={code}
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: 获取管理员登录状态和 CSRF Token
+      responses:
+        '200':
+          description: 无论是否登录均返回 200
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthStateResponse'
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: 注销当前会话
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      responses:
+        '204': { description: 已注销 }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/posts:
+    get:
+      tags: [Admin Posts]
+      summary: 获取管理文章列表
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/PostStatus' }
+      responses:
+        '200':
+          description: 包括草稿和未来文章的分页数据
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PostPageResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Admin Posts]
+      summary: 创建文章
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PostMutation' }
+      responses:
+        '201':
+          description: 创建成功
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PostDetailResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /admin/posts/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PostId'
+    get:
+      tags: [Admin Posts]
+      summary: 获取管理文章详情
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          description: 管理文章详情
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PostDetailResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Admin Posts]
+      summary: 完整更新文章
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PostMutation' }
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PostDetailResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [Admin Posts]
+      summary: 删除文章
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      responses:
+        '204': { description: 删除成功 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /admin/tags:
+    get:
+      tags: [Admin Taxonomies]
+      summary: 获取全部管理标签及文章计数
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          description: 标签数组
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Tag' } }
+    post:
+      tags: [Admin Taxonomies]
+      summary: 创建标签
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TagMutation' }
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Tag' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /admin/tags/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    put:
+      tags: [Admin Taxonomies]
+      summary: 更新标签
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TagMutation' }
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Tag' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [Admin Taxonomies]
+      summary: 删除标签
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      responses:
+        '204': { description: 删除成功 }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /admin/categories:
+    get:
+      tags: [Admin Taxonomies]
+      summary: 获取全部管理分类及文章计数
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          description: 分类数组
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Category' } }
+    post:
+      tags: [Admin Taxonomies]
+      summary: 创建分类
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CategoryMutation' }
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Category' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /admin/categories/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    put:
+      tags: [Admin Taxonomies]
+      summary: 更新分类
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CategoryMutation' }
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Category' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [Admin Taxonomies]
+      summary: 删除分类
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      responses:
+        '204': { description: 删除成功 }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /admin/uploads:
+    get:
+      tags: [Uploads]
+      summary: 获取媒体库
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: status
+          in: query
+          schema: { type: string, enum: [active, trashed], default: active }
+        - name: usage
+          in: query
+          schema: { type: string, enum: [all, used, unused], default: all }
+        - name: q
+          in: query
+          schema: { type: string, maxLength: 100 }
+      responses:
+        '200':
+          description: 媒体分页
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadPageResponse' }
+    post:
+      tags: [Uploads]
+      summary: 上传图片或允许的附件
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: 上传成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadResponse' }
+        '413': { $ref: '#/components/responses/BadRequest' }
+        '415': { $ref: '#/components/responses/BadRequest' }
+  /admin/uploads/{id}:
+    get:
+      tags: [Uploads]
+      summary: 获取媒体详情及引用位置
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UploadId'
+      responses:
+        '200':
+          description: 媒体详情
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Uploads]
+      summary: 将未被引用的媒体移入回收站
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UploadId'
+      responses:
+        '204': { description: 已移入回收站 }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /admin/uploads/{id}/restore:
+    post:
+      tags: [Uploads]
+      summary: 从回收站恢复媒体
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UploadId'
+      responses:
+        '200':
+          description: 恢复成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /admin/uploads/{id}/permanent:
+    delete:
+      tags: [Uploads]
+      summary: 永久删除回收站媒体及 MinIO 对象
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UploadId'
+      responses:
+        '204': { description: 已永久删除 }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /admin/site/appearance:
+    put:
+      tags: [Admin Site]
+      summary: 更新主页头像和全站 Banner
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SiteAppearanceMutation' }
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SiteProfileResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: blog_session
+    csrfToken:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: pageSize
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100 }
+    PostSlug:
+      name: slug
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$'
+        maxLength: 160
+    PostId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+    UploadId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+  responses:
+    BadRequest:
+      description: 请求参数或字段错误
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: 未登录或会话失效
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: 权限或 CSRF 校验失败
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: Slug 冲突、Slug 锁定、分类仍被使用、媒体被引用或状态冲突
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    HealthResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [status]
+          properties:
+            status: { type: string, enum: [ok] }
+    PostStatus:
+      type: string
+      enum: [draft, published, scheduled]
+    SocialLink:
+      type: object
+      required: [label, url, icon]
+      properties:
+        label: { type: string }
+        url: { type: string, format: uri }
+        icon: { type: string, enum: [github, mail, rss, link] }
+    SiteProfile:
+      type: object
+      required: [title, subtitle, description, avatarUrl, bannerUrl, authorName, authorBio, socialLinks, icpNumber]
+      properties:
+        title: { type: string }
+        subtitle: { type: string }
+        description: { type: string }
+        avatarUrl: { type: [string, 'null'] }
+        bannerUrl: { type: [string, 'null'] }
+        authorName: { type: string }
+        authorBio: { type: string }
+        socialLinks:
+          type: array
+          items: { $ref: '#/components/schemas/SocialLink' }
+        icpNumber: { type: [string, 'null'] }
+    SiteAppearanceMutation:
+      type: object
+      additionalProperties: false
+      required: [avatarUrl, bannerUrl]
+      properties:
+        avatarUrl: { type: [string, 'null'], maxLength: 2048 }
+        bannerUrl: { type: [string, 'null'], maxLength: 2048 }
+    SiteProfileResponse:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: '#/components/schemas/SiteProfile' }
+    Tag:
+      type: object
+      required: [id, name, slug, postCount]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string, maxLength: 80 }
+        slug: { type: string, maxLength: 80 }
+        postCount: { type: integer, minimum: 0 }
+    Category:
+      type: object
+      required: [id, name, slug, description, postCount]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string, maxLength: 80 }
+        slug: { type: string, maxLength: 80 }
+        description: { type: [string, 'null'], maxLength: 300 }
+        postCount: { type: integer, minimum: 0 }
+    PostLink:
+      type: object
+      required: [title, slug]
+      properties:
+        title: { type: string }
+        slug: { type: string }
+    PostSummary:
+      type: object
+      required: [id, title, slug, excerpt, coverUrl, status, publishedAt, updatedAt, category, tags, wordCount, readingTimeMinutes]
+      properties:
+        id: { type: integer, format: int64 }
+        title: { type: string, maxLength: 200 }
+        slug: { type: string, maxLength: 160 }
+        excerpt: { type: string, maxLength: 500 }
+        coverUrl: { type: [string, 'null'] }
+        status: { $ref: '#/components/schemas/PostStatus' }
+        publishedAt: { type: [string, 'null'], format: date-time }
+        updatedAt: { type: string, format: date-time }
+        category:
+          oneOf:
+            - $ref: '#/components/schemas/Category'
+            - type: 'null'
+        tags:
+          type: array
+          items: { $ref: '#/components/schemas/Tag' }
+        wordCount: { type: integer, minimum: 0 }
+        readingTimeMinutes: { type: integer, minimum: 1 }
+    PostDetail:
+      allOf:
+        - $ref: '#/components/schemas/PostSummary'
+        - type: object
+          required: [contentMarkdown, previousPost, nextPost]
+          properties:
+            contentMarkdown: { type: string }
+            previousPost:
+              oneOf:
+                - $ref: '#/components/schemas/PostLink'
+                - type: 'null'
+            nextPost:
+              oneOf:
+                - $ref: '#/components/schemas/PostLink'
+                - type: 'null'
+    Pagination:
+      type: object
+      required: [page, pageSize, total, totalPages]
+      properties:
+        page: { type: integer, minimum: 1 }
+        pageSize: { type: integer, minimum: 1, maximum: 100 }
+        total: { type: integer, minimum: 0 }
+        totalPages: { type: integer, minimum: 1 }
+    PostPage:
+      type: object
+      required: [items, pagination]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/PostSummary' }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+    PostPageResponse:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: '#/components/schemas/PostPage' }
+    PostDetailResponse:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: '#/components/schemas/PostDetail' }
+    PostMutation:
+      type: object
+      additionalProperties: false
+      required: [title, slug, excerpt, contentMarkdown, coverUrl, status, publishedAt, categoryId, tagIds]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+        slug:
+          type: string
+          minLength: 1
+          maxLength: 160
+          pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$'
+        excerpt: { type: string, maxLength: 500 }
+        contentMarkdown: { type: string, minLength: 1, maxLength: 2097152 }
+        coverUrl: { type: [string, 'null'], maxLength: 2048 }
+        status: { $ref: '#/components/schemas/PostStatus' }
+        publishedAt: { type: [string, 'null'], format: date-time }
+        categoryId: { type: [integer, 'null'], format: int64 }
+        tagIds:
+          type: array
+          maxItems: 20
+          uniqueItems: true
+          items: { type: integer, format: int64, minimum: 1 }
+    TagMutation:
+      type: object
+      additionalProperties: false
+      required: [name, slug]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+        slug:
+          type: string
+          minLength: 1
+          maxLength: 80
+          pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$'
+    CategoryMutation:
+      type: object
+      additionalProperties: false
+      required: [name, slug]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+        slug:
+          type: string
+          minLength: 1
+          maxLength: 80
+          pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$'
+        description: { type: [string, 'null'], maxLength: 300 }
+    AdminUser:
+      type: object
+      required: [githubId, login, name, avatarUrl]
+      properties:
+        githubId: { type: integer, format: int64 }
+        login: { type: string }
+        name: { type: string }
+        avatarUrl: { type: string, format: uri }
+    AuthState:
+      type: object
+      required: [authenticated, user, csrfToken]
+      properties:
+        authenticated: { type: boolean }
+        user:
+          oneOf:
+            - $ref: '#/components/schemas/AdminUser'
+            - type: 'null'
+        csrfToken: { type: [string, 'null'] }
+    AuthStateResponse:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: '#/components/schemas/AuthState' }
+    Upload:
+      type: object
+      required: [id, url, filename, contentType, size, width, height, status, usageCount, references, createdAt, trashedAt]
+      properties:
+        id: { type: integer, format: int64 }
+        url: { type: string }
+        filename: { type: string }
+        contentType: { type: string }
+        size: { type: integer, format: int64, minimum: 1 }
+        width: { type: integer, minimum: 1 }
+        height: { type: integer, minimum: 1 }
+        status: { type: string, enum: [active, trashed] }
+        usageCount: { type: integer, minimum: 0 }
+        references:
+          type: array
+          items: { $ref: '#/components/schemas/UploadReference' }
+        createdAt: { type: string, format: date-time }
+        trashedAt: { type: [string, 'null'], format: date-time }
+    UploadReference:
+      type: object
+      required: [resourceType, resourceId, field, label]
+      properties:
+        resourceType:
+          type: string
+          enum: [site_avatar, site_banner, post_cover, post_content]
+        resourceId: { type: [integer, 'null'], format: int64 }
+        field: { type: string }
+        label: { type: string }
+    UploadPage:
+      type: object
+      required: [items, pagination]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Upload' }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+    UploadPageResponse:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: '#/components/schemas/UploadPage' }
+    UploadResponse:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: '#/components/schemas/Upload' }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        fieldErrors:
+          type: object
+          additionalProperties: { type: string }
+        requestId: { type: string }

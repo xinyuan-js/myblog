@@ -1,0 +1,62 @@
+# Operating systems
+.DS_Store
+._*
+Thumbs.db
+
+# Editors and IDEs
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs and temporary files
+*.log
+*.pid
+*.tmp
+*.bak
+/tmp/
+
+# JavaScript / Vue
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.vite/
+.eslintcache
+.stylelintcache
+
+# Go build and test artifacts
+*.test
+*.prof
+*.coverprofile
+coverage.out
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.o
+*.wasm
+/bin/
+/build/
+/out/
+/apps/api/server
+/apps/api/bin/
+
+# Local tool and build caches (Go, Vite, test runners, etc.)
+.cache/
+
+# Runtime data must be persisted outside Git
+/data/
+/uploads/
+/apps/api/uploads/
+
+# Temporary source image; the application uses apps/web/src/assets/home-background.png
+/image.png
