@@ -18,46 +18,57 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xinyuan-js/myblog/apps/api/internal/config"
+	"github.com/example/myblog/apps/api/internal/config"
 )
 
 var (
 	ErrNotConfigured   = errors.New("github oauth is not configured")
 	ErrInvalidState    = errors.New("invalid oauth state")
-	ErrForbidden       = errors.New("github user is not the configured administrator")
 	ErrUnauthenticated = errors.New("session is missing or invalid")
 )
 
 const oauthStateCookie = "blog_oauth_state"
 
-type AdminUser struct {
+type User struct {
 	GitHubID  uint64 `json:"githubId"`
 	Login     string `json:"login"`
 	Name      string `json:"name"`
+	Email     string `json:"-"`
 	AvatarURL string `json:"avatarUrl"`
+	IsAdmin   bool   `json:"isAdmin"`
+	IsOwner   bool   `json:"isOwner"`
 }
 
 type Session struct {
-	User      AdminUser
+	User      User
 	CSRFToken string
 	TokenHash [32]byte
 	rawToken  string
 }
 
 type Service struct {
-	db     *sql.DB
-	cfg    config.Config
-	client *http.Client
-	now    func() time.Time
+	db       *sql.DB
+	artalkDB *sql.DB
+	cfg      config.Config
+	client   *http.Client
+	now      func() time.Time
 }
 
 func NewService(db *sql.DB, cfg config.Config) *Service {
 	return &Service{db: db, cfg: cfg, client: &http.Client{Timeout: 10 * time.Second}, now: time.Now}
 }
 
+func (s *Service) SetArtalkDatabase(db *sql.DB) { s.artalkDB = db }
+
 func (s *Service) Configured() bool {
-	return s.cfg.GitHubClientID != "" && s.cfg.GitHubClientSecret != "" &&
+	return usableOAuthCredential(s.cfg.GitHubClientID) && usableOAuthCredential(s.cfg.GitHubClientSecret) &&
 		s.cfg.GitHubAdminID != 0 && len(s.cfg.OAuthStateSecret) >= 32
+}
+
+func usableOAuthCredential(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return value != "" && !strings.Contains(value, "placeholder") &&
+		!strings.HasPrefix(value, "replace-") && !strings.HasPrefix(value, "change-me")
 }
 
 func (s *Service) SessionCookieName() string { return s.cfg.SessionCookieName }
@@ -90,7 +101,7 @@ func (s *Service) BeginLogin(returnTo string) (authorizeURL string, cookie *http
 	query := url.Values{
 		"client_id":    {s.cfg.GitHubClientID},
 		"redirect_uri": {s.cfg.GitHubCallbackURL},
-		"scope":        {"read:user"},
+		"scope":        {"read:user user:email"},
 		"state":        {nonce},
 	}
 	return "https://github.com/login/oauth/authorize?" + query.Encode(), &http.Cookie{
@@ -126,8 +137,12 @@ func (s *Service) CompleteLogin(ctx context.Context, code, queryState, signedSta
 	if err != nil {
 		return Session{}, "", err
 	}
-	if user.GitHubID != s.cfg.GitHubAdminID {
-		return Session{}, "", ErrForbidden
+	user.IsAdmin, user.IsOwner, err = s.authorization(ctx, user.GitHubID)
+	if err != nil {
+		return Session{}, "", err
+	}
+	if !user.IsAdmin && strings.HasPrefix(state.ReturnTo, "/admin") {
+		state.ReturnTo = "/"
 	}
 	session, err := s.createSession(ctx, user)
 	return session, state.ReturnTo, err
@@ -167,37 +182,41 @@ func (s *Service) Authenticate(ctx context.Context, cookieValue string) (Session
 	var githubID uint64
 	var storedCSRFHash []byte
 	err := s.db.QueryRowContext(ctx, `
-		SELECT github_id, github_login, display_name, avatar_url, csrf_token_hash
-		FROM admin_sessions
+		SELECT github_id, github_login, display_name, email, avatar_url, csrf_token_hash
+		FROM user_sessions
 		WHERE token_hash = ? AND expires_at > UTC_TIMESTAMP(6)
-	`, tokenHash[:]).Scan(&githubID, &session.User.Login, &session.User.Name, &session.User.AvatarURL, &storedCSRFHash)
+	`, tokenHash[:]).Scan(
+		&githubID, &session.User.Login, &session.User.Name, &session.User.Email, &session.User.AvatarURL, &storedCSRFHash,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, ErrUnauthenticated
 	}
 	if err != nil {
-		return Session{}, fmt.Errorf("query admin session: %w", err)
+		return Session{}, fmt.Errorf("query user session: %w", err)
 	}
 	if len(storedCSRFHash) != len(csrfHash) || subtle.ConstantTimeCompare(storedCSRFHash, csrfHash[:]) != 1 {
 		return Session{}, ErrUnauthenticated
 	}
-	// Re-check the immutable administrator ID on every authenticated request.
-	// This immediately revokes old sessions if ADMIN_GITHUB_ID is changed and
-	// prevents a valid-looking database row for another GitHub user from being
-	// treated as an administrator.
-	if githubID == 0 || githubID != s.cfg.GitHubAdminID {
-		_, _ = s.db.ExecContext(ctx, `DELETE FROM admin_sessions WHERE token_hash = ?`, tokenHash[:])
+	if githubID == 0 || session.User.Email == "" {
+		_, _ = s.db.ExecContext(ctx, `DELETE FROM user_sessions WHERE token_hash = ?`, tokenHash[:])
 		return Session{}, ErrUnauthenticated
 	}
 	session.User.GitHubID = githubID
+	// Resolve authorization on every request so grants and revocations take
+	// effect immediately without forcing users to sign in again.
+	session.User.IsAdmin, session.User.IsOwner, err = s.authorization(ctx, githubID)
+	if err != nil {
+		return Session{}, err
+	}
 	session.CSRFToken = csrf
 	session.TokenHash = tokenHash
-	_, _ = s.db.ExecContext(ctx, `UPDATE admin_sessions SET last_seen_at = UTC_TIMESTAMP(6) WHERE token_hash = ?`, tokenHash[:])
+	_, _ = s.db.ExecContext(ctx, `UPDATE user_sessions SET last_seen_at = UTC_TIMESTAMP(6) WHERE token_hash = ?`, tokenHash[:])
 	return session, nil
 }
 
 func (s *Service) Logout(ctx context.Context, session Session) error {
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM admin_sessions WHERE token_hash = ?`, session.TokenHash[:]); err != nil {
-		return fmt.Errorf("delete admin session: %w", err)
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM user_sessions WHERE token_hash = ?`, session.TokenHash[:]); err != nil {
+		return fmt.Errorf("delete user session: %w", err)
 	}
 	return nil
 }
@@ -288,38 +307,94 @@ func (s *Service) exchangeCode(ctx context.Context, code string) (string, error)
 	return payload.AccessToken, nil
 }
 
-func (s *Service) fetchGitHubUser(ctx context.Context, accessToken string) (AdminUser, error) {
+func (s *Service) fetchGitHubUser(ctx context.Context, accessToken string) (User, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/user", nil)
 	if err != nil {
-		return AdminUser{}, err
+		return User{}, err
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("Authorization", "Bearer "+accessToken)
 	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	response, err := s.client.Do(request)
 	if err != nil {
-		return AdminUser{}, fmt.Errorf("get github user: %w", err)
+		return User{}, fmt.Errorf("get github user: %w", err)
 	}
 	defer response.Body.Close()
 	var payload struct {
 		ID        uint64 `json:"id"`
 		Login     string `json:"login"`
 		Name      string `json:"name"`
+		Email     string `json:"email"`
 		AvatarURL string `json:"avatar_url"`
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&payload); err != nil {
-		return AdminUser{}, fmt.Errorf("decode github user: %w", err)
+		return User{}, fmt.Errorf("decode github user: %w", err)
 	}
 	if response.StatusCode != http.StatusOK || payload.ID == 0 || payload.Login == "" {
-		return AdminUser{}, fmt.Errorf("github user request failed with status %d", response.StatusCode)
+		return User{}, fmt.Errorf("github user request failed with status %d", response.StatusCode)
 	}
 	if strings.TrimSpace(payload.Name) == "" {
 		payload.Name = payload.Login
 	}
-	return AdminUser{GitHubID: payload.ID, Login: payload.Login, Name: payload.Name, AvatarURL: payload.AvatarURL}, nil
+	email, err := s.fetchVerifiedGitHubEmail(ctx, accessToken)
+	if err != nil {
+		return User{}, err
+	}
+	return User{
+		GitHubID: payload.ID, Login: payload.Login, Name: payload.Name,
+		Email: email, AvatarURL: payload.AvatarURL,
+	}, nil
 }
 
-func (s *Service) createSession(ctx context.Context, user AdminUser) (Session, error) {
+func (s *Service) fetchVerifiedGitHubEmail(ctx context.Context, accessToken string) (string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/user/emails", nil)
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("Authorization", "Bearer "+accessToken)
+	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	response, err := s.client.Do(request)
+	if err != nil {
+		return "", fmt.Errorf("get github emails: %w", err)
+	}
+	defer response.Body.Close()
+	var emails []struct {
+		Email    string `json:"email"`
+		Primary  bool   `json:"primary"`
+		Verified bool   `json:"verified"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&emails); err != nil {
+		return "", fmt.Errorf("decode github emails: %w", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("github emails request failed with status %d", response.StatusCode)
+	}
+	for _, candidate := range emails {
+		if candidate.Primary && candidate.Verified && strings.TrimSpace(candidate.Email) != "" {
+			return strings.ToLower(strings.TrimSpace(candidate.Email)), nil
+		}
+	}
+	for _, candidate := range emails {
+		if candidate.Verified && strings.TrimSpace(candidate.Email) != "" {
+			return strings.ToLower(strings.TrimSpace(candidate.Email)), nil
+		}
+	}
+	return "", errors.New("github account has no verified email")
+}
+
+func (s *Service) createSession(ctx context.Context, user User) (Session, error) {
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO github_users (github_id, github_login, display_name, email, avatar_url)
+		VALUES (?, ?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE
+			github_login = VALUES(github_login),
+			display_name = VALUES(display_name),
+			email = VALUES(email),
+			avatar_url = VALUES(avatar_url)
+	`, user.GitHubID, user.Login, user.Name, user.Email, user.AvatarURL); err != nil {
+		return Session{}, fmt.Errorf("remember github user: %w", err)
+	}
 	token, err := randomToken(32)
 	if err != nil {
 		return Session{}, err
@@ -328,11 +403,11 @@ func (s *Service) createSession(ctx context.Context, user AdminUser) (Session, e
 	tokenHash, csrfHash := sha256.Sum256([]byte(token)), sha256.Sum256([]byte(csrf))
 	now := s.now().UTC()
 	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO admin_sessions
-		(token_hash, csrf_token_hash, github_id, github_login, display_name, avatar_url, expires_at, last_seen_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, tokenHash[:], csrfHash[:], user.GitHubID, user.Login, user.Name, user.AvatarURL, now.Add(s.cfg.SessionTTL), now); err != nil {
-		return Session{}, fmt.Errorf("create admin session: %w", err)
+		INSERT INTO user_sessions
+		(token_hash, csrf_token_hash, github_id, github_login, display_name, email, avatar_url, expires_at, last_seen_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, tokenHash[:], csrfHash[:], user.GitHubID, user.Login, user.Name, user.Email, user.AvatarURL, now.Add(s.cfg.SessionTTL), now); err != nil {
+		return Session{}, fmt.Errorf("create user session: %w", err)
 	}
 	return Session{User: user, CSRFToken: csrf, TokenHash: tokenHash, rawToken: token}, nil
 }
@@ -346,12 +421,15 @@ func randomToken(size int) (string, error) {
 }
 
 func sanitizeReturnTo(value string) string {
-	if value == "/admin" || strings.HasPrefix(value, "/admin/") || strings.HasPrefix(value, "/admin?") {
-		if !strings.HasPrefix(value, "/admin/login") && !strings.ContainsAny(value, "\r\n") {
-			return value
-		}
+	if value == "" || strings.ContainsAny(value, "\r\n") || strings.HasPrefix(value, "//") {
+		return "/"
 	}
-	return "/admin"
+	target, err := url.ParseRequestURI(value)
+	if err != nil || target.IsAbs() || target.Host != "" || !strings.HasPrefix(target.Path, "/") ||
+		target.Path == "/login" || strings.HasPrefix(target.Path, "/admin/login") {
+		return "/"
+	}
+	return value
 }
 
 func parseSessionCookie(value string) (string, bool) {

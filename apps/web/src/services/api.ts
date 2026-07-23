@@ -1,7 +1,9 @@
 import { mockCategories, mockPosts, mockSiteProfile, mockTags } from '@/data/mock'
 import type {
-  AdminUser,
+  ArtalkSession,
+  Administrator,
   AuthState,
+  AuthUser,
   Category,
   Paginated,
   PostDetail,
@@ -38,6 +40,10 @@ export interface BlogApi {
   listAdminTags(): Promise<Tag[]>
   listAdminCategories(): Promise<Category[]>
   getAuthState(): Promise<AuthState>
+  createArtalkSession(): Promise<ArtalkSession>
+  listAdministrators(): Promise<Administrator[]>
+  addAdministrator(githubId: number): Promise<Administrator>
+  removeAdministrator(githubId: number): Promise<void>
   listAdminPosts(query?: PostQuery): Promise<Paginated<PostSummary>>
   getAdminPost(id: number): Promise<PostDetail>
   createPost(input: PostMutation): Promise<PostDetail>
@@ -65,6 +71,9 @@ const clone = <T>(value: T): T => structuredClone(value)
 class MockBlogApi implements BlogApi {
   private authenticated = false
   private uploads: MediaItem[] = []
+  private administrators: Administrator[] = [
+    { githubId: 12345678, isOwner: true, grantedAt: null },
+  ]
 
   async getSiteProfile() {
     await wait()
@@ -73,8 +82,7 @@ class MockBlogApi implements BlogApi {
 
   async updateSiteAppearance(input: SiteAppearanceMutation) {
     await wait()
-    mockSiteProfile.avatarUrl = input.avatarUrl
-    mockSiteProfile.bannerUrl = input.bannerUrl
+    Object.assign(mockSiteProfile, input)
     return clone(mockSiteProfile)
   }
 
@@ -91,6 +99,12 @@ class MockBlogApi implements BlogApi {
       .map((post) => ({ ...post, status: 'published' as const }))
     if (query.tag) posts = posts.filter((post) => post.tags.some((tag) => tag.slug === query.tag))
     if (query.category) posts = posts.filter((post) => post.category?.slug === query.category)
+    if (query.q) {
+      const keyword = query.q.trim().toLocaleLowerCase()
+      posts = posts.filter((post) =>
+        `${post.title}\n${post.excerpt}\n${post.contentMarkdown}`.toLocaleLowerCase().includes(keyword),
+      )
+    }
     const start = (page - 1) * pageSize
     return {
       items: clone(posts.slice(start, start + pageSize)),
@@ -136,8 +150,40 @@ class MockBlogApi implements BlogApi {
         login: 'demo-admin',
         name: '见山',
         avatarUrl: 'https://avatars.githubusercontent.com/u/583231?v=4',
+        isAdmin: true,
+        isOwner: true,
       },
     }
+  }
+
+  async createArtalkSession(): Promise<ArtalkSession> {
+    await wait(80)
+    if (!this.authenticated) throw new ApiError(401, 'AUTH_REQUIRED', '请先登录')
+    return {
+      token: 'mock-artalk-token',
+      user: { id: 1, name: '见山', email: 'demo@example.com', is_admin: true },
+    }
+  }
+
+  async listAdministrators() {
+    await wait()
+    return clone(this.administrators)
+  }
+
+  async addAdministrator(githubId: number) {
+    await wait()
+    const existing = this.administrators.find((item) => item.githubId === githubId)
+    if (existing) return clone(existing)
+    const added: Administrator = { githubId, isOwner: false, grantedAt: new Date().toISOString() }
+    this.administrators.push(added)
+    return clone(added)
+  }
+
+  async removeAdministrator(githubId: number) {
+    await wait()
+    const index = this.administrators.findIndex((item) => item.githubId === githubId && !item.isOwner)
+    if (index < 0) throw new ApiError(404, 'ADMINISTRATOR_NOT_FOUND', '管理员不存在')
+    this.administrators.splice(index, 1)
   }
 
   async listAdminPosts(query: PostQuery = {}) {
@@ -325,8 +371,8 @@ class HttpBlogApi implements BlogApi {
     this.request<SiteProfile>('/admin/site/appearance', { method: 'PUT', body: input })
   listPosts = (query: PostQuery = {}) => this.request<Paginated<PostSummary>>(`/posts${this.query(query)}`)
   getPost = (slug: string) => this.request<PostDetail>(`/posts/${encodeURIComponent(slug)}`)
-  listTags = () => this.request<Tag[]>('/tags')
-  listCategories = () => this.request<Category[]>('/categories')
+  listTags = () => this.request<Tag[]>('/tags', { cache: 'no-cache' })
+  listCategories = () => this.request<Category[]>('/categories', { cache: 'no-cache' })
   listAdminTags = () => this.request<Tag[]>('/admin/tags')
   listAdminCategories = () => this.request<Category[]>('/admin/categories')
   async getAuthState() {
@@ -334,6 +380,12 @@ class HttpBlogApi implements BlogApi {
     this.csrfToken = state.csrfToken
     return state
   }
+  createArtalkSession = () => this.request<ArtalkSession>('/auth/artalk/session', { method: 'POST' })
+  listAdministrators = () => this.request<Administrator[]>('/admin/administrators')
+  addAdministrator = (githubId: number) =>
+    this.request<Administrator>('/admin/administrators', { method: 'POST', body: { githubId } })
+  removeAdministrator = (githubId: number) =>
+    this.request<void>(`/admin/administrators/${githubId}`, { method: 'DELETE' })
   listAdminPosts = (query: PostQuery = {}) =>
     this.request<Paginated<PostSummary>>(`/admin/posts${this.query(query)}`)
   getAdminPost = (id: number) => this.request<PostDetail>(`/admin/posts/${id}`)
@@ -380,7 +432,7 @@ class HttpBlogApi implements BlogApi {
 
   private async request<T>(
     path: string,
-    options: { method?: string; body?: unknown; form?: FormData } = {},
+    options: { method?: string; body?: unknown; form?: FormData; cache?: RequestCache } = {},
   ): Promise<T> {
     const headers = new Headers({ Accept: 'application/json' })
     if (options.body !== undefined) headers.set('Content-Type', 'application/json')
@@ -390,6 +442,7 @@ class HttpBlogApi implements BlogApi {
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: options.method ?? 'GET',
       credentials: 'include',
+      cache: options.cache,
       headers,
       body: options.form ?? (options.body === undefined ? undefined : JSON.stringify(options.body)),
     })
@@ -404,20 +457,42 @@ class HttpBlogApi implements BlogApi {
   }
 }
 
-export const api: BlogApi = import.meta.env.VITE_USE_MOCK_API === 'false' ? new HttpBlogApi() : new MockBlogApi()
+export function isMockApiEnabled(value: string | undefined) {
+  return value === 'true'
+}
 
-export function sanitizeAdminReturnTo(value: unknown) {
-  if (typeof value !== 'string' || !/^\/admin(?:\/|$|\?)/.test(value) || value.startsWith('/admin/login')) {
-    return '/admin'
+export const mockApiEnabled = isMockApiEnabled(import.meta.env.VITE_USE_MOCK_API)
+export const api: BlogApi = mockApiEnabled ? new MockBlogApi() : new HttpBlogApi()
+
+export function sanitizeReturnTo(value: unknown, fallback = '/') {
+  if (
+    typeof value !== 'string' ||
+    !value.startsWith('/') ||
+    value.startsWith('//') ||
+    value.startsWith('/\\') ||
+    value.includes('\r') ||
+    value.includes('\n') ||
+    value.startsWith('/login') ||
+    value.startsWith('/admin/login')
+  ) {
+    return fallback
   }
   return value
 }
 
-export function githubLoginUrl(returnTo: unknown = '/admin') {
-  const safeReturnTo = sanitizeAdminReturnTo(returnTo)
-  if (import.meta.env.VITE_USE_MOCK_API !== 'false') return safeReturnTo
+export function sanitizeAdminReturnTo(value: unknown) {
+  const safe = sanitizeReturnTo(value, '/admin')
+  if (!/^\/admin(?:\/|$|\?)/.test(safe)) {
+    return '/admin'
+  }
+  return safe
+}
+
+export function githubLoginUrl(returnTo: unknown = '/') {
+  const safeReturnTo = sanitizeReturnTo(returnTo)
+  if (mockApiEnabled) return safeReturnTo
   const base = import.meta.env.VITE_API_BASE_URL || '/api'
   return `${base}/auth/github?return_to=${encodeURIComponent(safeReturnTo)}`
 }
 
-export type { AdminUser }
+export type { AuthUser }

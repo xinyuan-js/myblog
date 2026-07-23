@@ -5,6 +5,7 @@ import type { SiteProfile } from '@/types/blog'
 describe('external URL safety', () => {
   it('allows absolute HTTP and HTTPS links', () => {
     expect(isSafeExternalUrl('https://github.com/example')).toBe(true)
+    expect(isSafeExternalUrl('mailto:hello@example.com')).toBe(true)
     expect(isSafeExternalUrl('http://example.test/profile')).toBe(true)
   })
 
@@ -24,6 +25,7 @@ describe('external URL safety', () => {
       bannerUrl: null,
       authorName: 'Admin',
       authorBio: '',
+      aboutMarkdown: '# About',
       socialLinks: [
         { label: 'GitHub', url: 'https://github.com/example', icon: 'github' },
         { label: 'Unsafe', url: 'javascript:alert(1)', icon: 'link' },

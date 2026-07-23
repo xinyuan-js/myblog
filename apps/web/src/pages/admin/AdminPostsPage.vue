@@ -3,20 +3,20 @@ import { onMounted, ref } from 'vue'
 import { api } from '@/services/api'
 import type { PostStatus, PostSummary } from '@/types/blog'
 import { useDocumentMeta } from '@/composables/useDocumentMeta'
+import { useAdminToast } from '@/composables/useAdminToast'
 
 const posts = ref<PostSummary[]>([])
 const status = ref<PostStatus | ''>('')
 const loading = ref(true)
-const error = ref<string | null>(null)
+const toast = useAdminToast()
 useDocumentMeta('文章管理')
 
 async function load() {
   loading.value = true
-  error.value = null
   try {
     posts.value = (await api.listAdminPosts({ pageSize: 100, status: status.value || undefined })).items
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '文章加载失败'
+    toast.error(cause instanceof Error ? cause.message : '文章加载失败')
   } finally {
     loading.value = false
   }
@@ -24,8 +24,13 @@ async function load() {
 
 async function remove(post: PostSummary) {
   if (!window.confirm(`确定删除《${post.title}》吗？此操作不可撤销。`)) return
-  await api.deletePost(post.id)
-  await load()
+  try {
+    await api.deletePost(post.id)
+    await load()
+    toast.success('文章已删除')
+  } catch (cause) {
+    toast.error(cause instanceof Error ? cause.message : '文章删除失败')
+  }
 }
 
 onMounted(load)
@@ -44,7 +49,6 @@ onMounted(load)
       </select>
       <span>{{ posts.length }} 篇</span>
     </div>
-    <p v-if="error" class="admin-error">{{ error }}</p>
     <div v-if="loading" class="loading-state">正在加载…</div>
     <div v-else class="admin-table-wrap">
       <table class="admin-table">

@@ -2,15 +2,19 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
-	"github.com/xinyuan-js/myblog/apps/api/internal/blog"
+	"github.com/example/myblog/apps/api/internal/blog"
 )
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
@@ -34,7 +38,18 @@ func (h publicHandler) site(c *gin.Context) {
 		h.internalError(c, "get site profile", err)
 		return
 	}
-	c.Header("Cache-Control", "public, max-age=300")
+	encoded, err := json.Marshal(profile)
+	if err != nil {
+		h.internalError(c, "encode site profile", err)
+		return
+	}
+	etag := fmt.Sprintf(`"%x"`, sha256.Sum256(encoded))
+	c.Header("Cache-Control", "public, max-age=0, must-revalidate")
+	c.Header("ETag", etag)
+	if c.GetHeader("If-None-Match") == etag {
+		c.Status(http.StatusNotModified)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"data": profile})
 }
 
@@ -44,7 +59,7 @@ func (h publicHandler) tags(c *gin.Context) {
 		h.internalError(c, "list public tags", err)
 		return
 	}
-	c.Header("Cache-Control", "public, max-age=300")
+	c.Header("Cache-Control", "public, max-age=0, must-revalidate")
 	c.JSON(http.StatusOK, gin.H{"data": items})
 }
 
@@ -54,7 +69,7 @@ func (h publicHandler) categories(c *gin.Context) {
 		h.internalError(c, "list public categories", err)
 		return
 	}
-	c.Header("Cache-Control", "public, max-age=300")
+	c.Header("Cache-Control", "public, max-age=0, must-revalidate")
 	c.JSON(http.StatusOK, gin.H{"data": items})
 }
 
@@ -69,12 +84,21 @@ func (h publicHandler) posts(c *gin.Context) {
 	}
 	tag := strings.TrimSpace(c.Query("tag"))
 	category := strings.TrimSpace(c.Query("category"))
+	search := strings.TrimSpace(c.Query("q"))
 	if (tag != "" && !slugPattern.MatchString(tag)) || (category != "" && !slugPattern.MatchString(category)) {
 		writeError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "标签或分类 Slug 格式不正确")
 		return
 	}
+	if utf8.RuneCountInString(search) > 100 {
+		writeError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "搜索关键词不能超过 100 个字符")
+		return
+	}
+	if search != "" && utf8.RuneCountInString(search) < 2 {
+		writeError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "搜索关键词至少需要 2 个字符")
+		return
+	}
 	result, err := h.store.ListPublicPosts(c.Request.Context(), blog.PublicPostQuery{
-		Page: page, PageSize: pageSize, TagSlug: tag, CategorySlug: category,
+		Page: page, PageSize: pageSize, TagSlug: tag, CategorySlug: category, Search: search,
 	})
 	if err != nil {
 		h.internalError(c, "list public posts", err)

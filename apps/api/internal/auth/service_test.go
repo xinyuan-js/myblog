@@ -9,11 +9,28 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/xinyuan-js/myblog/apps/api/internal/config"
+	"github.com/example/myblog/apps/api/internal/config"
 )
 
 func testService() *Service {
 	return &Service{cfg: config.Config{OAuthStateSecret: strings.Repeat("s", 32)}, now: func() time.Time { return time.Unix(1_700_000_000, 0) }}
+}
+
+func TestConfiguredRejectsPlaceholderOAuthCredentials(t *testing.T) {
+	base := config.Config{
+		GitHubClientID: "real-client-id", GitHubClientSecret: "real-client-secret",
+		GitHubAdminID: 12345678, OAuthStateSecret: strings.Repeat("s", 32),
+	}
+	if !(&Service{cfg: base}).Configured() {
+		t.Fatal("complete OAuth configuration was rejected")
+	}
+	for _, placeholder := range []string{"local-placeholder", "replace-with-client-id", "change-me"} {
+		cfg := base
+		cfg.GitHubClientID = placeholder
+		if (&Service{cfg: cfg}).Configured() {
+			t.Errorf("placeholder credential %q was accepted", placeholder)
+		}
+	}
 }
 
 func TestSignedOAuthStateRejectsTampering(t *testing.T) {
@@ -35,10 +52,11 @@ func TestSignedOAuthStateRejectsTampering(t *testing.T) {
 func TestSanitizeReturnToPreventsOpenRedirect(t *testing.T) {
 	tests := map[string]string{
 		"/admin/posts/1/edit":                      "/admin/posts/1/edit",
-		"https://evil.example/admin":               "/admin",
-		"//evil.example/admin":                     "/admin",
-		"/admin/login":                             "/admin",
-		"/admin\r\nLocation: https://evil.example": "/admin",
+		"/posts/hello?from=login":                  "/posts/hello?from=login",
+		"https://evil.example/admin":               "/",
+		"//evil.example/admin":                     "/",
+		"/admin/login":                             "/",
+		"/admin\r\nLocation: https://evil.example": "/",
 	}
 	for input, expected := range tests {
 		if actual := sanitizeReturnTo(input); actual != expected {
@@ -69,16 +87,14 @@ func TestParseSessionCookieRejectsSeparators(t *testing.T) {
 	}
 }
 
-func TestAuthenticateRechecksConfiguredAdministratorID(t *testing.T) {
+func TestAuthenticateDerivesAdministratorRoleFromConfiguredID(t *testing.T) {
 	for _, test := range []struct {
-		name           string
-		storedID       uint64
-		wantErr        error
-		expectLastSeen bool
-		expectDelete   bool
+		name      string
+		storedID  uint64
+		wantAdmin bool
 	}{
-		{name: "configured administrator", storedID: 12345678, expectLastSeen: true},
-		{name: "revoked administrator", storedID: 87654321, wantErr: ErrUnauthenticated, expectDelete: true},
+		{name: "configured administrator", storedID: 12345678, wantAdmin: true},
+		{name: "ordinary authenticated user", storedID: 87654321, wantAdmin: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			db, mock, err := sqlmock.New()
@@ -92,22 +108,22 @@ func TestAuthenticateRechecksConfiguredAdministratorID(t *testing.T) {
 			token := strings.Repeat("a", 43)
 			tokenHash := sha256.Sum256([]byte(token))
 			csrfHash := sha256.Sum256([]byte(service.csrfToken(token)))
-			rows := sqlmock.NewRows([]string{"github_id", "github_login", "display_name", "avatar_url", "csrf_token_hash"}).
-				AddRow(test.storedID, "admin", "Admin", "https://example.com/avatar.png", csrfHash[:])
+			rows := sqlmock.NewRows([]string{"github_id", "github_login", "display_name", "email", "avatar_url", "csrf_token_hash"}).
+				AddRow(test.storedID, "user", "User", "user@example.com", "https://example.com/avatar.png", csrfHash[:])
 			mock.ExpectQuery("SELECT github_id").WithArgs(tokenHash[:]).WillReturnRows(rows)
-			if test.expectDelete {
-				mock.ExpectExec("DELETE FROM admin_sessions").WithArgs(tokenHash[:]).WillReturnResult(sqlmock.NewResult(0, 1))
+			if test.storedID != 12345678 {
+				mock.ExpectQuery("SELECT EXISTS").WithArgs(test.storedID).
+					WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 			}
-			if test.expectLastSeen {
-				mock.ExpectExec("UPDATE admin_sessions SET last_seen_at").WithArgs(tokenHash[:]).WillReturnResult(sqlmock.NewResult(0, 1))
-			}
+			mock.ExpectExec("UPDATE user_sessions SET last_seen_at").WithArgs(tokenHash[:]).WillReturnResult(sqlmock.NewResult(0, 1))
 
 			session, err := service.Authenticate(context.Background(), token)
-			if !errors.Is(err, test.wantErr) {
-				t.Fatalf("Authenticate() error = %v, want %v", err, test.wantErr)
+			if err != nil {
+				t.Fatalf("Authenticate() error = %v", err)
 			}
-			if test.wantErr == nil && session.User.GitHubID != 12345678 {
-				t.Fatalf("authenticated GitHub ID = %d", session.User.GitHubID)
+			if session.User.GitHubID != test.storedID || session.User.IsAdmin != test.wantAdmin ||
+				session.User.IsOwner != (test.storedID == 12345678) {
+				t.Fatalf("authenticated user = %+v, want ID %d admin=%v", session.User, test.storedID, test.wantAdmin)
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatal(err)

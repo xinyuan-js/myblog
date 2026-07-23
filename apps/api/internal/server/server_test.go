@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xinyuan-js/myblog/apps/api/internal/config"
+	"github.com/example/myblog/apps/api/internal/config"
 )
 
 func TestNewAppliesHTTPConfiguration(t *testing.T) {

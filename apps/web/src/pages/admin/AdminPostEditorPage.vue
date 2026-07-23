@@ -5,6 +5,7 @@ import MarkdownRenderer from '@/components/blog/MarkdownRenderer.vue'
 import { api } from '@/services/api'
 import type { Category, PostMutation, Tag } from '@/types/blog'
 import { useDocumentMeta } from '@/composables/useDocumentMeta'
+import { useAdminToast } from '@/composables/useAdminToast'
 
 const route = useRoute()
 const router = useRouter()
@@ -17,9 +18,8 @@ const saving = ref(false)
 const uploading = ref(false)
 const uploadingBody = ref(false)
 const markdownInput = ref<HTMLTextAreaElement | null>(null)
-const error = ref<string | null>(null)
-const savedMessage = ref<string | null>(null)
 const slugLocked = ref(false)
+const toast = useAdminToast()
 const form = reactive<PostMutation>({
   title: '', slug: '', excerpt: '', contentMarkdown: '# 新文章\n\n从这里开始写作。', coverUrl: null,
   status: 'draft', publishedAt: null, categoryId: null, tagIds: [],
@@ -51,11 +51,11 @@ async function uploadCover(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0]
   if (!file) return
   uploading.value = true
-  error.value = null
   try {
     form.coverUrl = (await api.upload(file)).url
+    toast.success('封面上传成功，保存文章后生效')
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '上传失败'
+    toast.error(cause instanceof Error ? cause.message : '上传失败')
   } finally {
     uploading.value = false
   }
@@ -66,7 +66,6 @@ async function uploadBodyImage(event: Event) {
   const file = input.files?.[0]
   if (!file) return
   uploadingBody.value = true
-  error.value = null
   try {
     const result = await api.upload(file)
     const textarea = markdownInput.value
@@ -78,8 +77,9 @@ async function uploadBodyImage(event: Event) {
     await nextTick()
     textarea?.focus()
     textarea?.setSelectionRange(start + markdownValue.length, start + markdownValue.length)
+    toast.success('图片已插入正文')
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '正文图片上传失败'
+    toast.error(cause instanceof Error ? cause.message : '正文图片上传失败')
   } finally {
     uploadingBody.value = false
     input.value = ''
@@ -88,23 +88,21 @@ async function uploadBodyImage(event: Event) {
 
 async function save() {
   normalizeSlug()
-  error.value = null
-  savedMessage.value = null
   if (!form.title.trim() || !form.slug || !form.contentMarkdown.trim()) {
-    error.value = '标题、Slug 和正文不能为空。'
+    toast.error('标题、Slug 和正文不能为空')
     return
   }
   if (form.status === 'scheduled' && !form.publishedAt) {
-    error.value = '定时发布必须设置发布时间。'
+    toast.error('定时发布必须设置发布时间')
     return
   }
   saving.value = true
   try {
     const result = id.value ? await api.updatePost(id.value, form) : await api.createPost(form)
-    savedMessage.value = '文章已保存。'
+    toast.success('文章已保存')
     if (!id.value) await router.replace(`/admin/posts/${result.id}/edit`)
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '保存失败'
+    toast.error(cause instanceof Error ? cause.message : '保存失败')
   } finally {
     saving.value = false
   }
@@ -125,7 +123,7 @@ onMounted(async () => {
       slugLocked.value = post.status === 'published' && post.publishedAt !== null && new Date(post.publishedAt) <= new Date()
     }
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '文章加载失败'
+    toast.error(cause instanceof Error ? cause.message : '文章加载失败')
   } finally {
     loading.value = false
   }
@@ -160,8 +158,6 @@ onMounted(async () => {
         <label class="button upload-button"><input class="sr-only" type="file" accept="image/jpeg,image/png,image/webp,image/gif" @change="uploadCover" />{{ uploading ? '上传中…' : '上传封面' }}</label>
         <img v-if="form.coverUrl" class="cover-preview" :src="form.coverUrl" alt="封面预览" />
       </section>
-      <p v-if="error" class="admin-error">{{ error }}</p>
-      <p v-if="savedMessage" class="save-success">{{ savedMessage }}</p>
     </aside>
   </form>
 </template>
@@ -185,7 +181,6 @@ onMounted(async () => {
 .tag-field button.selected { color: white; background: var(--primary); }
 .upload-button { cursor: pointer; }
 .cover-preview { width: 100%; max-height: 11rem; border-radius: 0.65rem; object-fit: cover; }
-.save-success { padding: 0.7rem 0.85rem; border-radius: 0.65rem; color: oklch(0.46 0.13 150); background: oklch(0.93 0.05 150); }
 @media (max-width: 1040px) { .editor-grid { grid-template-columns: 1fr; } .editor-sidebar { position: static; grid-template-columns: 1fr 1fr; } }
 @media (max-width: 650px) { .editor-sidebar { grid-template-columns: 1fr; } }
 </style>

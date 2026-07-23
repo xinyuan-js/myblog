@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { ApiError, api, sanitizeAdminReturnTo } from './api'
+import { ApiError, api, isMockApiEnabled, sanitizeAdminReturnTo, sanitizeReturnTo } from './api'
 
 describe('mock blog api', () => {
+  it('uses the real API unless mock mode is explicitly enabled', () => {
+    expect(isMockApiEnabled(undefined)).toBe(false)
+    expect(isMockApiEnabled('false')).toBe(false)
+    expect(isMockApiEnabled('true')).toBe(true)
+  })
+
   it('public list never exposes drafts', async () => {
     const result = await api.listPosts({ pageSize: 100 })
     expect(result.items.length).toBeGreaterThan(0)
@@ -12,6 +18,14 @@ describe('mock blog api', () => {
     const result = await api.listPosts({ tag: 'database', pageSize: 100 })
     expect(result.items.length).toBeGreaterThan(0)
     expect(result.items.every((post) => post.tags.some((tag) => tag.slug === 'database'))).toBe(true)
+  })
+
+  it('searches published post content', async () => {
+    const result = await api.listPosts({ q: 'MySQL', pageSize: 100 })
+    expect(result.items.length).toBeGreaterThan(0)
+    expect(result.items.every((post) =>
+      `${post.title}\n${post.excerpt}`.toLocaleLowerCase().includes('mysql'),
+    )).toBe(true)
   })
 
   it('paginates public posts without duplicates', async () => {
@@ -38,6 +52,7 @@ describe('mock blog api', () => {
   it('updates the public site appearance', async () => {
     const original = await api.getSiteProfile()
     const updated = await api.updateSiteAppearance({
+      ...original,
       avatarUrl: '/uploads/test-avatar.webp',
       bannerUrl: '/uploads/test-background.webp',
     })
@@ -48,8 +63,7 @@ describe('mock blog api', () => {
       bannerUrl: '/uploads/test-background.webp',
     })
     await api.updateSiteAppearance({
-      avatarUrl: original.avatarUrl,
-      bannerUrl: original.bannerUrl,
+      ...original,
     })
   })
 
@@ -70,6 +84,14 @@ describe('mock blog api', () => {
     expect(sanitizeAdminReturnTo('//evil.example/admin')).toBe('/admin')
     expect(sanitizeAdminReturnTo('/admin/login')).toBe('/admin')
     expect(sanitizeAdminReturnTo('/posts/public')).toBe('/admin')
+  })
+
+  it('accepts safe public return paths for unified login', () => {
+    expect(sanitizeReturnTo('/posts/hello?reply=1')).toBe('/posts/hello?reply=1')
+    expect(sanitizeReturnTo('/about')).toBe('/about')
+    expect(sanitizeReturnTo('//evil.example/posts')).toBe('/')
+    expect(sanitizeReturnTo('https://evil.example/posts')).toBe('/')
+    expect(sanitizeReturnTo('/login?returnTo=/admin')).toBe('/')
   })
 
   it('rejects changing the slug of an already published post', async () => {

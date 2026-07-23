@@ -1,6 +1,7 @@
 import type { SiteProfile } from '@/types/blog'
 
 export function isSafeExternalUrl(value: string): boolean {
+  if (/^mailto:[^@\s]+@[^@\s]+\.[^@\s]+$/i.test(value)) return true
   try {
     const parsed = new URL(value)
     return parsed.protocol === 'https:' || parsed.protocol === 'http:'

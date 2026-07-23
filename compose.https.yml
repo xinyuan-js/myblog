@@ -1,9 +1,11 @@
 services:
   web:
+    environment:
+      NGINX_SERVER_NAME: ${NGINX_SERVER_NAME:?set NGINX_SERVER_NAME}
     ports:
       - "443:443"
     volumes:
-      - ./deploy/nginx/https.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/nginx/https.conf:/etc/nginx/templates/default.conf.template:ro
       # Mount the resolved certificate files, not Let's Encrypt's live/
       # directory whose ../../archive symlinks would be broken in-container.
       - ${TLS_FULLCHAIN_FILE:?set TLS_FULLCHAIN_FILE}:/etc/nginx/certs/fullchain.pem:ro

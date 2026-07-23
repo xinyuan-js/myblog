@@ -3,25 +3,32 @@ import { computed, onMounted, ref } from 'vue'
 import { api } from '@/services/api'
 import type { Category, PostSummary, Tag } from '@/types/blog'
 import { useDocumentMeta } from '@/composables/useDocumentMeta'
+import { useAdminToast } from '@/composables/useAdminToast'
 
 const posts = ref<PostSummary[]>([])
 const tags = ref<Tag[]>([])
 const categories = ref<Category[]>([])
 const loading = ref(true)
+const toast = useAdminToast()
 const publishedCount = computed(() => posts.value.filter((post) => post.status === 'published').length)
 const draftCount = computed(() => posts.value.filter((post) => post.status === 'draft').length)
 useDocumentMeta('管理概览')
 
 onMounted(async () => {
-  const [postResult, tagResult, categoryResult] = await Promise.all([
-    api.listAdminPosts({ pageSize: 100 }),
-    api.listAdminTags(),
-    api.listAdminCategories(),
-  ])
-  posts.value = postResult.items
-  tags.value = tagResult
-  categories.value = categoryResult
-  loading.value = false
+  try {
+    const [postResult, tagResult, categoryResult] = await Promise.all([
+      api.listAdminPosts({ pageSize: 100 }),
+      api.listAdminTags(),
+      api.listAdminCategories(),
+    ])
+    posts.value = postResult.items
+    tags.value = tagResult
+    categories.value = categoryResult
+  } catch (cause) {
+    toast.error(cause instanceof Error ? cause.message : '管理概览加载失败')
+  } finally {
+    loading.value = false
+  }
 })
 </script>
 

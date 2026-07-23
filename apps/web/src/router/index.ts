@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { api, sanitizeAdminReturnTo } from '@/services/api'
+import { api, sanitizeAdminReturnTo, sanitizeReturnTo } from '@/services/api'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -17,7 +17,14 @@ const router = createRouter({
     { path: '/categories', name: 'categories', component: () => import('@/pages/CategoriesPage.vue') },
     { path: '/categories/:slug', name: 'category-posts', component: () => import('@/pages/TaxonomyPostsPage.vue') },
     { path: '/about', name: 'about', component: () => import('@/pages/AboutPage.vue') },
-    { path: '/admin/login', name: 'admin-login', meta: { layout: 'bare' }, component: () => import('@/pages/admin/AdminLoginPage.vue') },
+    { path: '/login', name: 'login', meta: { layout: 'bare' }, component: () => import('@/pages/admin/AdminLoginPage.vue') },
+    {
+      path: '/admin/login',
+      redirect: (to) => ({
+        path: '/login',
+        query: { ...to.query, returnTo: sanitizeAdminReturnTo(to.query.returnTo) },
+      }),
+    },
     { path: '/admin', name: 'admin-dashboard', meta: { layout: 'admin', requiresAuth: true }, component: () => import('@/pages/admin/AdminDashboardPage.vue') },
     { path: '/admin/posts', name: 'admin-posts', meta: { layout: 'admin', requiresAuth: true }, component: () => import('@/pages/admin/AdminPostsPage.vue') },
     { path: '/admin/posts/new', name: 'admin-post-new', meta: { layout: 'admin', requiresAuth: true }, component: () => import('@/pages/admin/AdminPostEditorPage.vue') },
@@ -25,15 +32,19 @@ const router = createRouter({
     { path: '/admin/taxonomies', name: 'admin-taxonomies', meta: { layout: 'admin', requiresAuth: true }, component: () => import('@/pages/admin/AdminTaxonomiesPage.vue') },
     { path: '/admin/media', name: 'admin-media', meta: { layout: 'admin', requiresAuth: true }, component: () => import('@/pages/admin/AdminMediaPage.vue') },
     { path: '/admin/site', name: 'admin-site', meta: { layout: 'admin', requiresAuth: true }, component: () => import('@/pages/admin/AdminSiteSettingsPage.vue') },
+    { path: '/admin/administrators', name: 'admin-administrators', meta: { layout: 'admin', requiresAuth: true, requiresOwner: true }, component: () => import('@/pages/admin/AdminAdministratorsPage.vue') },
     { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('@/pages/NotFoundPage.vue') },
   ],
 })
 
 router.beforeEach(async (to) => {
-  if (to.name === 'admin-login') {
+  if (to.name === 'login') {
     try {
       const auth = await api.getAuthState()
-      if (auth.authenticated) return sanitizeAdminReturnTo(to.query.returnTo)
+      if (auth.authenticated) {
+        const returnTo = sanitizeReturnTo(to.query.returnTo)
+        return returnTo.startsWith('/admin') && !auth.user?.isAdmin ? '/' : returnTo
+      }
     } catch {
       // 登录页必须在 API 暂时不可用时仍可打开并显示登录入口。
     }
@@ -43,10 +54,14 @@ router.beforeEach(async (to) => {
   if (!to.meta.requiresAuth) return true
   try {
     const auth = await api.getAuthState()
-    if (auth.authenticated) return true
-    return { name: 'admin-login', query: { returnTo: to.fullPath } }
+    if (auth.authenticated && auth.user?.isAdmin) {
+      if (to.meta.requiresOwner && !auth.user.isOwner) return { name: 'admin-dashboard' }
+      return true
+    }
+    if (auth.authenticated) return { name: 'home' }
+    return { name: 'login', query: { returnTo: to.fullPath } }
   } catch {
-    return { name: 'admin-login', query: { returnTo: to.fullPath, error: 'session_check_failed' } }
+    return { name: 'login', query: { returnTo: to.fullPath, error: 'session_check_failed' } }
   }
 })
 

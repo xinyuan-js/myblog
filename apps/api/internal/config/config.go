@@ -41,6 +41,8 @@ type Config struct {
 	SessionCookieName  string
 	SessionSecure      bool
 	SessionTTL         time.Duration
+	ArtalkDatabaseDSN  string
+	ArtalkInternalURL  string
 	MinIOEndpoint      string
 	MinIOAccessKey     string
 	MinIOSecretKey     string
@@ -72,6 +74,8 @@ func Load() (Config, error) {
 		SessionCookieName:  envOrDefault("SESSION_COOKIE_NAME", "blog_session"),
 		SessionSecure:      envOrDefault("SESSION_COOKIE_SECURE", "false") == "true",
 		SessionTTL:         7 * 24 * time.Hour,
+		ArtalkDatabaseDSN:  envOrDefault("ARTALK_DATABASE_DSN", "artalk:artalk@tcp(127.0.0.1:3306)/artalk?charset=utf8mb4&parseTime=true&loc=UTC"),
+		ArtalkInternalURL:  strings.TrimSuffix(envOrDefault("ARTALK_INTERNAL_URL", "http://127.0.0.1:23366"), "/"),
 		MinIOEndpoint:      envOrDefault("MINIO_ENDPOINT", "127.0.0.1:9000"),
 		MinIOAccessKey:     envOrDefault("MINIO_ACCESS_KEY", "minioadmin"),
 		MinIOSecretKey:     envOrDefault("MINIO_SECRET_KEY", "minioadmin"),
@@ -152,6 +156,9 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.DatabaseDSN) == "" {
 		return errors.New("DATABASE_DSN must not be empty")
 	}
+	if strings.TrimSpace(c.ArtalkDatabaseDSN) == "" {
+		return errors.New("ARTALK_DATABASE_DSN must not be empty")
+	}
 	if c.DatabaseMaxOpen < 1 {
 		return errors.New("DATABASE_MAX_OPEN must be at least 1")
 	}
@@ -171,6 +178,11 @@ func (c Config) Validate() error {
 	if !regexp.MustCompile(`^[!#$%&'*+\-.^_` + "`" + `|~0-9A-Za-z]+$`).MatchString(c.SessionCookieName) {
 		return errors.New("SESSION_COOKIE_NAME must be a valid cookie name")
 	}
+	artalkURL, err := url.Parse(c.ArtalkInternalURL)
+	if err != nil || (artalkURL.Scheme != "http" && artalkURL.Scheme != "https") || artalkURL.Host == "" ||
+		artalkURL.User != nil || artalkURL.Path != "" || artalkURL.RawQuery != "" || artalkURL.Fragment != "" {
+		return errors.New("ARTALK_INTERNAL_URL must be an origin such as http://artalk:23366")
+	}
 	minioHost, minioPort, err := net.SplitHostPort(c.MinIOEndpoint)
 	portNumber, portErr := strconv.Atoi(minioPort)
 	if err != nil || minioHost == "" || portErr != nil || portNumber < 1 || portNumber > 65535 {
@@ -186,14 +198,17 @@ func (c Config) Validate() error {
 		return errors.New("MEDIA_PUBLIC_URL must be an absolute URL or an absolute path")
 	}
 	if c.Environment == Production {
-		if c.GitHubClientID == "" || c.GitHubClientSecret == "" || c.GitHubAdminID == 0 {
+		if !validOAuthCredential(c.GitHubClientID) || !validOAuthCredential(c.GitHubClientSecret) || c.GitHubAdminID == 0 {
 			return errors.New("GitHub OAuth settings and ADMIN_GITHUB_ID are required in production")
 		}
-		if len(c.OAuthStateSecret) < 32 {
-			return errors.New("OAUTH_STATE_SECRET must contain at least 32 characters in production")
+		if !validProductionSecret(c.OAuthStateSecret) {
+			return errors.New("OAUTH_STATE_SECRET must be a non-placeholder secret with at least 32 characters in production")
 		}
-		if len(c.MinIOAccessKey) < 3 || len(c.MinIOSecretKey) < 32 {
-			return errors.New("production MinIO access key and secret must be at least 3 and 32 characters")
+		if !validProductionCredential(c.MinIOAccessKey, 3) || !validProductionSecret(c.MinIOSecretKey) {
+			return errors.New("production MinIO credentials must be non-placeholder values with a secret of at least 32 characters")
+		}
+		if c.SessionTTL > 30*24*time.Hour {
+			return errors.New("SESSION_TTL must not exceed 30 days in production")
 		}
 		if !c.SessionSecure || appOrigin.Scheme != "https" || callback.Scheme != "https" {
 			return errors.New("production cookies, APP_ORIGIN and GITHUB_CALLBACK_URL must use HTTPS")
@@ -206,6 +221,22 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func validOAuthCredential(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return value != "" && !strings.Contains(value, "placeholder") &&
+		!strings.HasPrefix(value, "replace-") && !strings.HasPrefix(value, "change-me")
+}
+
+func validProductionCredential(value string, minimum int) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	return len(value) >= minimum && normalized != "" && !strings.Contains(normalized, "placeholder") &&
+		!strings.HasPrefix(normalized, "replace-") && !strings.HasPrefix(normalized, "change-me")
+}
+
+func validProductionSecret(value string) bool {
+	return validProductionCredential(value, 32)
 }
 
 func validPublicMediaURL(value string) bool {

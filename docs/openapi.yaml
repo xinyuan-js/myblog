@@ -58,6 +58,10 @@ paths:
           in: query
           schema: { type: string }
           description: 分类 Slug
+        - name: q
+          in: query
+          schema: { type: string, minLength: 2, maxLength: 100 }
+          description: 在已发布文章的标题、摘要和正文中搜索
       responses:
         '200':
           description: 文章分页
@@ -119,8 +123,8 @@ paths:
       parameters:
         - name: return_to
           in: query
-          schema: { type: string, default: /admin }
-          description: 只允许站内 /admin 路径
+          schema: { type: string, default: / }
+          description: OAuth 完成后返回的安全站内路径
       responses:
         '302': { description: 重定向到 GitHub }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -139,11 +143,11 @@ paths:
           schema: { type: string }
       responses:
         '302':
-          description: 成功时建立会话并重定向 return_to；授权取消、非管理员或 state 失效时重定向 /admin/login?error={code}
+          description: 成功时建立会话并重定向 return_to；授权取消或 state 失效时重定向 /login?error={code}
   /auth/me:
     get:
       tags: [Auth]
-      summary: 获取管理员登录状态和 CSRF Token
+      summary: 获取当前用户登录状态、管理权限和 CSRF Token
       responses:
         '200':
           description: 无论是否登录均返回 200
@@ -159,6 +163,33 @@ paths:
       responses:
         '204': { description: 已注销 }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /auth/artalk/session:
+    post:
+      tags: [Auth]
+      summary: 为当前 GitHub 用户创建 Artalk 评论会话
+      description: 同步当前用户的评论管理权限；站点所有者和已授权管理员会成为 Artalk 管理员。
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      responses:
+        '200':
+          description: Artalk 会话
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ArtalkSessionResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /internal/artalk-oidc/userinfo:
+    get:
+      tags: [Auth]
+      summary: Artalk 内部 SSO 用户信息
+      description: 仅供内部 Artalk 服务调用，不应经公网反向代理暴露。
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: 经过签名验证的 GitHub 用户身份
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ArtalkUserInfo' }
+        '401': { description: 身份令牌无效或已过期 }
   /admin/posts:
     get:
       tags: [Admin Posts]
@@ -498,6 +529,56 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/SiteProfileResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
+  /admin/administrators:
+    get:
+      tags: [Admin Permissions]
+      summary: 列出管理员（仅站点所有者）
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          description: 管理员列表
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdministratorListResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Admin Permissions]
+      summary: 按 GitHub 数字 ID 添加管理员（仅站点所有者）
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [githubId]
+              properties:
+                githubId: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '201':
+          description: 授权成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdministratorResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /admin/administrators/{githubId}:
+    delete:
+      tags: [Admin Permissions]
+      summary: 移除管理员（仅站点所有者）
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      parameters:
+        - name: githubId
+          in: path
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '204': { description: 权限已移除 }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 components:
   securitySchemes:
     sessionCookie:
@@ -583,7 +664,7 @@ components:
         icon: { type: string, enum: [github, mail, rss, link] }
     SiteProfile:
       type: object
-      required: [title, subtitle, description, avatarUrl, bannerUrl, authorName, authorBio, socialLinks, icpNumber]
+      required: [title, subtitle, description, avatarUrl, bannerUrl, authorName, authorBio, aboutMarkdown, socialLinks, icpNumber]
       properties:
         title: { type: string }
         subtitle: { type: string }
@@ -592,6 +673,7 @@ components:
         bannerUrl: { type: [string, 'null'] }
         authorName: { type: string }
         authorBio: { type: string }
+        aboutMarkdown: { type: string }
         socialLinks:
           type: array
           items: { $ref: '#/components/schemas/SocialLink' }
@@ -599,10 +681,21 @@ components:
     SiteAppearanceMutation:
       type: object
       additionalProperties: false
-      required: [avatarUrl, bannerUrl]
+      required: [title, subtitle, description, avatarUrl, bannerUrl, authorName, authorBio, aboutMarkdown, socialLinks, icpNumber]
       properties:
+        title: { type: string, minLength: 1, maxLength: 120 }
+        subtitle: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 500 }
         avatarUrl: { type: [string, 'null'], maxLength: 2048 }
         bannerUrl: { type: [string, 'null'], maxLength: 2048 }
+        authorName: { type: string, minLength: 1, maxLength: 120 }
+        authorBio: { type: string, maxLength: 500 }
+        aboutMarkdown: { type: string, minLength: 1, maxLength: 1048576 }
+        socialLinks:
+          type: array
+          maxItems: 10
+          items: { $ref: '#/components/schemas/SocialLink' }
+        icpNumber: { type: [string, 'null'], maxLength: 100 }
     SiteProfileResponse:
       type: object
       required: [data]
@@ -738,14 +831,16 @@ components:
           maxLength: 80
           pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$'
         description: { type: [string, 'null'], maxLength: 300 }
-    AdminUser:
+    AuthUser:
       type: object
-      required: [githubId, login, name, avatarUrl]
+      required: [githubId, login, name, avatarUrl, isAdmin, isOwner]
       properties:
         githubId: { type: integer, format: int64 }
         login: { type: string }
         name: { type: string }
         avatarUrl: { type: string, format: uri }
+        isAdmin: { type: boolean }
+        isOwner: { type: boolean }
     AuthState:
       type: object
       required: [authenticated, user, csrfToken]
@@ -753,7 +848,7 @@ components:
         authenticated: { type: boolean }
         user:
           oneOf:
-            - $ref: '#/components/schemas/AdminUser'
+            - $ref: '#/components/schemas/AuthUser'
             - type: 'null'
         csrfToken: { type: [string, 'null'] }
     AuthStateResponse:
@@ -761,6 +856,47 @@ components:
       required: [data]
       properties:
         data: { $ref: '#/components/schemas/AuthState' }
+    ArtalkSession:
+      type: object
+      required: [token, user]
+      properties:
+        token: { type: string }
+        user:
+          type: object
+          additionalProperties: true
+    ArtalkSessionResponse:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: '#/components/schemas/ArtalkSession' }
+    ArtalkUserInfo:
+      type: object
+      required: [sub, email, email_verified, name, nickname]
+      properties:
+        sub: { type: string }
+        email: { type: string, format: email }
+        email_verified: { type: boolean, const: true }
+        name: { type: string }
+        nickname: { type: string }
+    Administrator:
+      type: object
+      required: [githubId, isOwner, grantedAt]
+      properties:
+        githubId: { type: integer, format: int64, minimum: 1 }
+        isOwner: { type: boolean }
+        grantedAt: { type: [string, 'null'], format: date-time }
+    AdministratorResponse:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: '#/components/schemas/Administrator' }
+    AdministratorListResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Administrator' }
     Upload:
       type: object
       required: [id, url, filename, contentType, size, width, height, status, usageCount, references, createdAt, trashedAt]
@@ -785,7 +921,7 @@ components:
       properties:
         resourceType:
           type: string
-          enum: [site_avatar, site_banner, post_cover, post_content]
+          enum: [site_avatar, site_banner, site_about, post_cover, post_content]
         resourceId: { type: [integer, 'null'], format: int64 }
         field: { type: string }
         label: { type: string }

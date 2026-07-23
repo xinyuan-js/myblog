@@ -1,40 +1,123 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { Contrast, Home, Menu, Moon, Palette, RotateCcw, Sun, X } from '@lucide/vue'
+import { Contrast, LogOut, Menu, Moon, Palette, RotateCcw, Settings, Sun, X } from '@lucide/vue'
 import { useTheme } from '@/composables/useTheme'
+import { useAuth } from '@/composables/useAuth'
+import SearchDialog from './SearchDialog.vue'
 
 defineProps<{ title: string }>()
 
 const menuOpen = ref(false)
 const paletteOpen = ref(false)
 const themeMenuOpen = ref(false)
+const accountMenuOpen = ref(false)
+const searchOpen = ref(false)
+const loggingOut = ref(false)
+const { authState, refreshAuth, logout } = useAuth()
 const { scheme, hue, toggleTheme, setTheme, setHue } = useTheme()
 const defaultHue = 250
 
-const links = [
-  { label: '首页', to: '/' },
-  { label: '归档', to: '/archive' },
-  { label: '标签', to: '/tags' },
-  { label: '分类', to: '/categories' },
-  { label: '关于', to: '/about' },
-  { label: '登录', to: '/admin/login' },
-]
+const links = computed(() => {
+  const items = [
+    { label: '首页', to: '/' },
+    { label: '归档', to: '/archive' },
+    { label: '标签', to: '/tags' },
+    { label: '分类', to: '/categories' },
+    { label: '关于', to: '/about' },
+  ]
+  if (authState.value !== null) {
+    if (!authState.value.authenticated) items.push({ label: '登录', to: '/login' })
+  }
+  return items
+})
+
+async function refreshAuthState() {
+  try {
+    await refreshAuth()
+  } catch {
+    // 导航仍可正常使用，稍后在聚焦页面时重试。
+  }
+}
+
+async function logoutCurrentUser() {
+  if (loggingOut.value) return
+  loggingOut.value = true
+  try {
+    await logout()
+    menuOpen.value = false
+    accountMenuOpen.value = false
+  } finally {
+    loggingOut.value = false
+  }
+}
+
+function refreshAuthWhenVisible() {
+  if (document.visibilityState === 'visible') void refreshAuthState()
+}
+
+function handleSearchShortcut(event: KeyboardEvent) {
+  const target = event.target as HTMLElement | null
+  const isTyping = target?.matches('input, textarea, select, [contenteditable="true"]')
+  if ((event.key === '/' && !isTyping) || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k')) {
+    event.preventDefault()
+    searchOpen.value = true
+  } else if (event.key === 'Escape') {
+    searchOpen.value = false
+  }
+}
+
+onMounted(() => {
+  void refreshAuthState()
+  window.addEventListener('focus', refreshAuthState)
+  window.addEventListener('keydown', handleSearchShortcut)
+  document.addEventListener('visibilitychange', refreshAuthWhenVisible)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('focus', refreshAuthState)
+  window.removeEventListener('keydown', handleSearchShortcut)
+  document.removeEventListener('visibilitychange', refreshAuthWhenVisible)
+})
 </script>
 
 <template>
   <header class="nav-shell page-shell">
     <nav class="navbar card" aria-label="主导航">
       <RouterLink class="brand-button" to="/" @click="menuOpen = false">
-        <Home :size="22" :stroke-width="2.3" aria-hidden="true" />
-        <span>{{ title }}</span>
+        <img src="/brand-logo.png" alt="" />
+        <span class="sr-only">{{ title }}</span>
       </RouterLink>
 
       <div class="desktop-links">
         <RouterLink v-for="link in links" :key="link.to" :to="link.to">{{ link.label }}</RouterLink>
+        <div v-if="authState?.authenticated && authState.user" class="account-wrap">
+          <button
+            class="account-avatar"
+            type="button"
+            :aria-expanded="accountMenuOpen"
+            aria-label="打开账号菜单"
+            @click="accountMenuOpen = !accountMenuOpen"
+          >
+            <img :src="authState.user.avatarUrl" :alt="`${authState.user.name} 的 GitHub 头像`" />
+          </button>
+          <div v-if="accountMenuOpen" class="account-menu card">
+            <div class="account-summary">
+              <strong>{{ authState.user.name }}</strong>
+              <span>@{{ authState.user.login }}</span>
+            </div>
+            <RouterLink v-if="authState.user.isAdmin" to="/admin" @click="accountMenuOpen = false">
+              <Settings :size="17" aria-hidden="true" />进入管理
+            </RouterLink>
+            <button type="button" :disabled="loggingOut" @click="logoutCurrentUser">
+              <LogOut :size="17" aria-hidden="true" />{{ loggingOut ? '退出中…' : '退出登录' }}
+            </button>
+          </div>
+        </div>
       </div>
 
       <div class="nav-actions">
+        <SearchDialog :open="searchOpen" @open="searchOpen = true" @close="searchOpen = false" />
         <div class="palette-wrap">
           <button class="icon-button" type="button" aria-label="调整主题色" @click="paletteOpen = !paletteOpen">
             <Palette :size="20" aria-hidden="true" />
@@ -71,6 +154,16 @@ const links = [
 
       <div v-if="menuOpen" class="mobile-links card">
         <RouterLink v-for="link in links" :key="link.to" :to="link.to" @click="menuOpen = false">{{ link.label }}</RouterLink>
+        <div v-if="authState?.authenticated && authState.user" class="mobile-account">
+          <img :src="authState.user.avatarUrl" alt="" />
+          <span><strong>{{ authState.user.name }}</strong><small>@{{ authState.user.login }}</small></span>
+        </div>
+        <RouterLink v-if="authState?.user?.isAdmin" to="/admin" @click="menuOpen = false">
+          <Settings :size="18" aria-hidden="true" />进入管理
+        </RouterLink>
+        <button v-if="authState?.authenticated" type="button" :disabled="loggingOut" @click="logoutCurrentUser">
+          <LogOut :size="18" aria-hidden="true" />{{ loggingOut ? '退出中…' : '退出登录' }}
+        </button>
       </div>
     </nav>
   </header>
@@ -92,8 +185,20 @@ const links = [
   padding: 0 1rem;
   border-top-left-radius: 0;
   border-top-right-radius: 0;
-  background: var(--card-bg);
+  border: 1px solid rgb(255 255 255 / 0.28);
+  border-top: 0;
+  background: rgb(255 255 255 / 0.72);
+  box-shadow: 0 8px 30px rgb(20 25 45 / 0.08);
+  backdrop-filter: blur(18px) saturate(1.25);
+  -webkit-backdrop-filter: blur(18px) saturate(1.25);
   overflow: visible;
+}
+
+:global(:root.dark) .navbar {
+  border-color: rgb(255 255 255 / 0.08);
+  border-top: 0;
+  background: oklch(0.18 0.015 var(--hue) / 0.72);
+  box-shadow: 0 8px 30px rgb(0 0 0 / 0.2);
 }
 
 .brand-button,
@@ -113,7 +218,9 @@ const links = [
   font-weight: 800;
 }
 
-.brand-button svg { color: var(--primary); }
+.brand-button img { width: 2.65rem; height: 2.65rem; object-fit: contain; }
+:global(:root.dark) .brand-button img { filter: brightness(0) invert(1); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 .desktop-links {
   display: flex;
@@ -135,6 +242,19 @@ const links = [
   color: var(--primary-strong);
   background: var(--plain-hover);
 }
+
+.account-wrap { position: relative; display: grid; place-items: center; margin-left: 0.35rem; }
+.account-avatar { width: 2.5rem; height: 2.5rem; padding: 0; overflow: hidden; border: 2px solid color-mix(in srgb, var(--primary) 35%, var(--line-color)); border-radius: 50%; background: var(--button-bg); cursor: pointer; }
+.account-avatar:hover { border-color: var(--primary); transform: translateY(-1px); }
+.account-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.account-menu { position: absolute; z-index: 70; top: 3.2rem; right: 0; display: grid; width: 13rem; padding: 0.5rem; background: var(--float-panel-bg); box-shadow: var(--shadow-float); }
+.account-menu .account-summary { display: grid; padding: 0.55rem 0.7rem 0.75rem; border-bottom: 1px solid var(--line-color); }
+.account-summary strong { overflow: hidden; color: var(--text-strong); text-overflow: ellipsis; white-space: nowrap; }
+.account-summary span { overflow: hidden; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; font-size: 0.78rem; }
+.account-menu a,
+.account-menu button { display: flex; min-height: 2.5rem; align-items: center; gap: 0.55rem; margin-top: 0.25rem; padding: 0 0.7rem; border: 0; border-radius: 0.55rem; color: var(--text-main); background: transparent; font: inherit; font-size: 0.88rem; font-weight: 700; cursor: pointer; }
+.account-menu a:hover,
+.account-menu button:hover { color: var(--primary-strong); background: var(--plain-hover); }
 
 .nav-actions {
   display: flex;
@@ -191,13 +311,31 @@ const links = [
   box-shadow: var(--shadow-float);
 }
 
-.mobile-links a {
+.mobile-links a,
+.mobile-links button {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
   padding: 0.75rem 0.9rem;
+  border: 0;
   border-radius: 0.65rem;
+  color: var(--text-main);
+  background: transparent;
   font-weight: 700;
+  cursor: pointer;
 }
 
-.mobile-links a:hover { color: var(--primary-strong); background: var(--plain-hover); }
+.mobile-links a:hover,
+.mobile-links button:hover { color: var(--primary-strong); background: var(--plain-hover); }
+.mobile-account { display: grid; grid-template-columns: 2.4rem 1fr; align-items: center; gap: 0.65rem; margin: 0.25rem 0; padding: 0.75rem 0.9rem; border-top: 1px solid var(--line-color); border-bottom: 1px solid var(--line-color); }
+.mobile-account img { width: 2.4rem; height: 2.4rem; border-radius: 50%; object-fit: cover; }
+.mobile-account span,
+.mobile-account strong,
+.mobile-account small { display: block; min-width: 0; }
+.mobile-account strong,
+.mobile-account small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mobile-account strong { color: var(--text-strong); }
+.mobile-account small { color: var(--text-muted); font-size: 0.75rem; }
 
 @media (max-width: 1023px) {
   .theme-menu { display: none; }

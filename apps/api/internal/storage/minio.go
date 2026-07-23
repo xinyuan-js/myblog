@@ -7,7 +7,7 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
-	"github.com/xinyuan-js/myblog/apps/api/internal/config"
+	"github.com/example/myblog/apps/api/internal/config"
 )
 
 type ObjectStore interface {

@@ -7,6 +7,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/mail"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -15,7 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
-	"github.com/xinyuan-js/myblog/apps/api/internal/blog"
+	"github.com/example/myblog/apps/api/internal/blog"
 )
 
 var markdownSyntax = regexp.MustCompile(`(?m)^[#>*+\-]+\s*|[` + "`" + `*_~\[\]()]`)
@@ -251,15 +253,64 @@ func (h adminHandler) deleteCategory(c *gin.Context) {
 
 func (h adminHandler) updateSiteAppearance(c *gin.Context) {
 	var mutation blog.SiteAppearanceMutation
-	if !decodeJSONBody(c, &mutation, 8192) {
+	if !decodeJSONBody(c, &mutation, 1<<20) {
 		return
 	}
+	mutation.Title = strings.TrimSpace(mutation.Title)
+	mutation.Subtitle = strings.TrimSpace(mutation.Subtitle)
+	mutation.Description = strings.TrimSpace(mutation.Description)
+	mutation.AuthorName = strings.TrimSpace(mutation.AuthorName)
+	mutation.AuthorBio = strings.TrimSpace(mutation.AuthorBio)
 	fields := map[string]string{}
+	if length := utf8.RuneCountInString(mutation.Title); length < 1 || length > 120 {
+		fields["title"] = "站点标题长度必须为 1～120 个字符"
+	}
+	if utf8.RuneCountInString(mutation.Subtitle) > 200 {
+		fields["subtitle"] = "副标题不能超过 200 个字符"
+	}
+	if utf8.RuneCountInString(mutation.Description) > 500 {
+		fields["description"] = "站点描述不能超过 500 个字符"
+	}
+	if length := utf8.RuneCountInString(mutation.AuthorName); length < 1 || length > 120 {
+		fields["authorName"] = "作者名称长度必须为 1～120 个字符"
+	}
+	if utf8.RuneCountInString(mutation.AuthorBio) > 500 {
+		fields["authorBio"] = "作者简介不能超过 500 个字符"
+	}
+	if strings.TrimSpace(mutation.AboutMarkdown) == "" || len(mutation.AboutMarkdown) > 1<<20 {
+		fields["aboutMarkdown"] = "About 内容不能为空且不能超过 1 MiB"
+	}
 	if mutation.AvatarURL != nil && !validMediaURL(*mutation.AvatarURL) {
 		fields["avatarUrl"] = "头像必须使用本站媒体库 URL"
 	}
 	if mutation.BannerURL != nil && !validMediaURL(*mutation.BannerURL) {
 		fields["bannerUrl"] = "Banner 必须使用本站媒体库 URL"
+	}
+	if len(mutation.SocialLinks) > 10 {
+		fields["socialLinks"] = "社交链接最多设置 10 个"
+	}
+	seenLinks := map[string]bool{}
+	for index := range mutation.SocialLinks {
+		link := &mutation.SocialLinks[index]
+		link.Label, link.URL, link.Icon = strings.TrimSpace(link.Label), strings.TrimSpace(link.URL), strings.TrimSpace(link.Icon)
+		if utf8.RuneCountInString(link.Label) < 1 || utf8.RuneCountInString(link.Label) > 50 ||
+			len(link.URL) > 2048 || !validSocialURL(link.URL) ||
+			(link.Icon != "github" && link.Icon != "mail" && link.Icon != "rss" && link.Icon != "link") ||
+			seenLinks[link.URL] {
+			fields["socialLinks"] = "社交链接的名称、URL 或图标不正确，且 URL 不能重复"
+			break
+		}
+		seenLinks[link.URL] = true
+	}
+	if mutation.ICPNumber != nil {
+		value := strings.TrimSpace(*mutation.ICPNumber)
+		if value == "" {
+			mutation.ICPNumber = nil
+		} else if utf8.RuneCountInString(value) > 100 {
+			fields["icpNumber"] = "备案号不能超过 100 个字符"
+		} else {
+			mutation.ICPNumber = &value
+		}
 	}
 	if len(fields) > 0 {
 		writeValidationError(c, fields)
@@ -275,6 +326,24 @@ func (h adminHandler) updateSiteAppearance(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": profile})
+}
+
+func validSocialURL(value string) bool {
+	if value == "" || strings.ContainsAny(value, "\r\n") {
+		return false
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.User != nil {
+		return false
+	}
+	if (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" {
+		return true
+	}
+	if parsed.Scheme != "mailto" || parsed.Opaque == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	address, err := mail.ParseAddress(parsed.Opaque)
+	return err == nil && address.Address == parsed.Opaque
 }
 
 func (h adminHandler) writePostStoreError(c *gin.Context, err error) bool {

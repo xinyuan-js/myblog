@@ -3,13 +3,17 @@ package blog
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 )
 
 func (s *Store) AdminTags(ctx context.Context) ([]Tag, error) {
@@ -252,7 +256,17 @@ func (s *Store) UpdateSiteAppearance(ctx context.Context, mutation SiteAppearanc
 	if err := s.syncSiteMedia(ctx, tx, mutation); err != nil {
 		return SiteProfile{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE site_settings SET avatar_url=?,banner_url=? WHERE id=1`, mutation.AvatarURL, mutation.BannerURL); err != nil {
+	socialJSON, err := json.Marshal(mutation.SocialLinks)
+	if err != nil {
+		return SiteProfile{}, fmt.Errorf("encode social links: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE site_settings
+		SET title=?,subtitle=?,description=?,avatar_url=?,banner_url=?,
+		    author_name=?,author_bio=?,about_markdown=?,social_links=?,icp_number=?
+		WHERE id=1
+	`, mutation.Title, mutation.Subtitle, mutation.Description, mutation.AvatarURL, mutation.BannerURL,
+		mutation.AuthorName, mutation.AuthorBio, mutation.AboutMarkdown, socialJSON, mutation.ICPNumber); err != nil {
 		return SiteProfile{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -308,6 +322,9 @@ func (s *Store) DeleteTag(ctx context.Context, id int64) error {
 		return ErrTaxonomyInUse
 	}
 	result, err := s.db.ExecContext(ctx, `DELETE FROM tags WHERE id=?`, id)
+	if isForeignKeyInUse(err) {
+		return ErrTaxonomyInUse
+	}
 	if err != nil {
 		return fmt.Errorf("delete tag: %w", err)
 	}
@@ -364,6 +381,9 @@ func (s *Store) DeleteCategory(ctx context.Context, id int64) error {
 		return ErrTaxonomyInUse
 	}
 	result, err := s.db.ExecContext(ctx, `DELETE FROM categories WHERE id=?`, id)
+	if isForeignKeyInUse(err) {
+		return ErrTaxonomyInUse
+	}
 	if err != nil {
 		return fmt.Errorf("delete category: %w", err)
 	}
@@ -429,7 +449,10 @@ func isDuplicate(err error) bool {
 	return errors.As(err, &mysqlError) && mysqlError.Number == 1062
 }
 
-var markdownImagePattern = regexp.MustCompile(`!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
+func isForeignKeyInUse(err error) bool {
+	var mysqlError *mysql.MySQLError
+	return errors.As(err, &mysqlError) && mysqlError.Number == 1451
+}
 
 func (s *Store) syncPostMedia(ctx context.Context, tx *sql.Tx, postID int64, mutation PostMutation) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM upload_references WHERE resource_type IN ('post_cover','post_content') AND resource_id=?`, postID); err != nil {
@@ -440,13 +463,7 @@ func (s *Store) syncPostMedia(ctx context.Context, tx *sql.Tx, postID int64, mut
 			return err
 		}
 	}
-	seen := map[string]bool{}
-	for _, match := range markdownImagePattern.FindAllStringSubmatch(mutation.ContentMarkdown, -1) {
-		url := match[1]
-		if seen[url] {
-			continue
-		}
-		seen[url] = true
+	for _, url := range markdownImageURLs(mutation.ContentMarkdown) {
 		if err := s.insertMediaReference(ctx, tx, url, "post_content", &postID, "contentMarkdown", false); err != nil {
 			return err
 		}
@@ -454,8 +471,35 @@ func (s *Store) syncPostMedia(ctx context.Context, tx *sql.Tx, postID int64, mut
 	return nil
 }
 
+func markdownImageURLs(markdown string) []string {
+	source := []byte(markdown)
+	document := goldmark.DefaultParser().Parse(text.NewReader(source))
+	urls := make([]string, 0)
+	seen := make(map[string]struct{})
+	_ = ast.Walk(document, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		image, ok := node.(*ast.Image)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		url := string(util.UnescapePunctuations(image.Destination))
+		if url == "" {
+			return ast.WalkContinue, nil
+		}
+		if _, exists := seen[url]; exists {
+			return ast.WalkContinue, nil
+		}
+		seen[url] = struct{}{}
+		urls = append(urls, url)
+		return ast.WalkContinue, nil
+	})
+	return urls
+}
+
 func (s *Store) syncSiteMedia(ctx context.Context, tx *sql.Tx, mutation SiteAppearanceMutation) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM upload_references WHERE resource_type IN ('site_avatar','site_banner')`); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM upload_references WHERE resource_type IN ('site_avatar','site_banner','site_about')`); err != nil {
 		return err
 	}
 	if mutation.AvatarURL != nil {
@@ -465,6 +509,11 @@ func (s *Store) syncSiteMedia(ctx context.Context, tx *sql.Tx, mutation SiteAppe
 	}
 	if mutation.BannerURL != nil {
 		if err := s.insertMediaReference(ctx, tx, *mutation.BannerURL, "site_banner", nil, "bannerUrl", true); err != nil {
+			return err
+		}
+	}
+	for _, imageURL := range markdownImageURLs(mutation.AboutMarkdown) {
+		if err := s.insertMediaReference(ctx, tx, imageURL, "site_about", nil, "aboutMarkdown", false); err != nil {
 			return err
 		}
 	}

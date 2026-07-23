@@ -39,10 +39,10 @@ func (s *Store) SiteProfile(ctx context.Context) (SiteProfile, error) {
 	var socialJSON []byte
 	err := s.db.QueryRowContext(ctx, `
 		SELECT title, subtitle, description, avatar_url, banner_url,
-		       author_name, author_bio, social_links, icp_number
+		       author_name, author_bio, about_markdown, social_links, icp_number
 		FROM site_settings WHERE id = 1
 	`).Scan(&profile.Title, &profile.Subtitle, &profile.Description, &avatar, &banner,
-		&profile.AuthorName, &profile.AuthorBio, &socialJSON, &icp)
+		&profile.AuthorName, &profile.AuthorBio, &profile.AboutMarkdown, &socialJSON, &icp)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SiteProfile{}, ErrNotFound
 	}
@@ -63,12 +63,12 @@ func (s *Store) SiteProfile(ctx context.Context) (SiteProfile, error) {
 
 func (s *Store) PublicTags(ctx context.Context) ([]Tag, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT t.id, t.name, t.slug, COUNT(DISTINCT p.id) AS post_count
+		SELECT t.id, t.name, t.slug,
+		       COUNT(DISTINCT CASE WHEN p.deleted_at IS NULL AND p.status = 'published'
+		         AND p.published_at <= UTC_TIMESTAMP(6) THEN p.id END) AS post_count
 		FROM tags t
-		JOIN post_tags pt ON pt.tag_id = t.id
-		JOIN posts p ON p.id = pt.post_id
-		WHERE p.deleted_at IS NULL AND p.status = 'published'
-		  AND p.published_at <= UTC_TIMESTAMP(6)
+		LEFT JOIN post_tags pt ON pt.tag_id = t.id
+		LEFT JOIN posts p ON p.id = pt.post_id
 		GROUP BY t.id, t.name, t.slug
 		ORDER BY post_count DESC, t.name ASC
 	`)
@@ -132,6 +132,11 @@ func (s *Store) ListPublicPosts(ctx context.Context, query PublicPostQuery) (Pos
 		conditions = append(conditions, "c.slug = ?")
 		args = append(args, query.CategorySlug)
 	}
+	if query.Search != "" {
+		conditions = append(conditions,
+			"MATCH(p.title, p.excerpt, p.content_markdown) AGAINST (?)")
+		args = append(args, query.Search)
+	}
 	where := strings.Join(conditions, " AND ")
 
 	var total int64
@@ -140,7 +145,13 @@ func (s *Store) ListPublicPosts(ctx context.Context, query PublicPostQuery) (Pos
 		return PostPage{}, fmt.Errorf("count public posts: %w", err)
 	}
 
-	selectArgs := append(append([]any{}, args...), query.PageSize, (query.Page-1)*query.PageSize)
+	orderBy := "p.published_at DESC, p.id DESC"
+	selectArgs := append([]any{}, args...)
+	if query.Search != "" {
+		orderBy = "MATCH(p.title, p.excerpt, p.content_markdown) AGAINST (?) DESC, p.published_at DESC, p.id DESC"
+		selectArgs = append(selectArgs, query.Search)
+	}
+	selectArgs = append(selectArgs, query.PageSize, (query.Page-1)*query.PageSize)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT p.id, p.title, p.slug, p.excerpt, p.cover_url, p.status,
 		       p.published_at, p.updated_at, p.word_count,
@@ -148,7 +159,7 @@ func (s *Store) ListPublicPosts(ctx context.Context, query PublicPostQuery) (Pos
 		FROM posts p
 		LEFT JOIN categories c ON c.id = p.category_id
 		WHERE `+where+`
-		ORDER BY p.published_at DESC, p.id DESC
+		ORDER BY `+orderBy+`
 		LIMIT ? OFFSET ?
 	`, selectArgs...)
 	if err != nil {

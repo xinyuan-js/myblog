@@ -5,8 +5,7 @@ defineProps<{ authorName: string; icpNumber?: string | null }>()
 <template>
   <footer class="site-footer">
     <div class="footer-line" />
-    <p>© {{ new Date().getFullYear() }} {{ authorName }}. All Rights Reserved. / <RouterLink to="/archive">归档</RouterLink> / <RouterLink to="/about">关于</RouterLink><template v-if="icpNumber"> / <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener">{{ icpNumber }}</a></template></p>
-    <p>Powered by <a href="https://vuejs.org/" target="_blank" rel="noopener">Vue</a> &amp; <a href="https://github.com/saicaca/fuwari" target="_blank" rel="noopener">Fuwari</a></p>
+    <p>© {{ new Date().getFullYear() }} {{ authorName }} / <RouterLink to="/archive">归档</RouterLink> / <RouterLink to="/about">关于</RouterLink><template v-if="icpNumber"> / <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener">{{ icpNumber }}</a></template></p>
   </footer>
 </template>
 

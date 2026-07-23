@@ -12,7 +12,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/xinyuan-js/myblog/apps/api/internal/config"
+	"github.com/example/myblog/apps/api/internal/config"
 )
 
 //go:embed migrations/*.sql

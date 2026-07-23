@@ -3,16 +3,28 @@ import { onMounted, reactive, ref } from 'vue'
 import { api } from '@/services/api'
 import type { Category, Tag } from '@/types/blog'
 import { useDocumentMeta } from '@/composables/useDocumentMeta'
+import { siteTaxonomiesUpdatedStorageKey, useSite } from '@/composables/useSite'
+import { useAdminToast } from '@/composables/useAdminToast'
 
 const tags = ref<Tag[]>([])
 const categories = ref<Category[]>([])
 const tagForm = reactive({ id: 0, name: '', slug: '' })
 const categoryForm = reactive({ id: 0, name: '', slug: '', description: '' })
-const error = ref<string | null>(null)
+const toast = useAdminToast()
+const { refreshTaxonomies } = useSite()
 useDocumentMeta('标签与分类')
 
 async function load() {
-  ;[tags.value, categories.value] = await Promise.all([api.listAdminTags(), api.listAdminCategories()])
+  try {
+    ;[tags.value, categories.value] = await Promise.all([api.listAdminTags(), api.listAdminCategories()])
+  } catch (cause) {
+    toast.error(cause instanceof Error ? cause.message : '分类与标签加载失败')
+  }
+}
+
+async function notifyPublicTaxonomiesChanged() {
+  await refreshTaxonomies()
+  localStorage.setItem(siteTaxonomiesUpdatedStorageKey, String(Date.now()))
 }
 
 function resetTag() { Object.assign(tagForm, { id: 0, name: '', slug: '' }) }
@@ -21,33 +33,45 @@ function editTag(tag: Tag) { Object.assign(tagForm, { id: tag.id, name: tag.name
 function editCategory(category: Category) { Object.assign(categoryForm, { id: category.id, name: category.name, slug: category.slug, description: category.description ?? '' }) }
 
 async function saveTag() {
-  error.value = null
   try {
     const input = { name: tagForm.name.trim(), slug: tagForm.slug.trim() }
-    if (tagForm.id) await api.updateTag(tagForm.id, input)
+    const editing = Boolean(tagForm.id)
+    if (editing) await api.updateTag(tagForm.id, input)
     else await api.createTag(input)
-    resetTag(); await load()
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : '标签保存失败' }
+    resetTag()
+    await Promise.all([load(), notifyPublicTaxonomiesChanged()])
+    toast.success(editing ? '标签已更新' : '标签已添加')
+  } catch (cause) { toast.error(cause instanceof Error ? cause.message : '标签保存失败') }
 }
 
 async function saveCategory() {
-  error.value = null
   try {
     const input = { name: categoryForm.name.trim(), slug: categoryForm.slug.trim(), description: categoryForm.description.trim() || null }
-    if (categoryForm.id) await api.updateCategory(categoryForm.id, input)
+    const editing = Boolean(categoryForm.id)
+    if (editing) await api.updateCategory(categoryForm.id, input)
     else await api.createCategory(input)
-    resetCategory(); await load()
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : '分类保存失败' }
+    resetCategory()
+    await Promise.all([load(), notifyPublicTaxonomiesChanged()])
+    toast.success(editing ? '分类已更新' : '分类已添加')
+  } catch (cause) { toast.error(cause instanceof Error ? cause.message : '分类保存失败') }
 }
 
 async function removeTag(tag: Tag) {
   if (!window.confirm(`确定删除标签“${tag.name}”吗？`)) return
-  try { await api.deleteTag(tag.id); await load() } catch (cause) { error.value = cause instanceof Error ? cause.message : '标签删除失败' }
+  try {
+    await api.deleteTag(tag.id)
+    await Promise.all([load(), notifyPublicTaxonomiesChanged()])
+    toast.success('标签已删除')
+  } catch (cause) { toast.error(cause instanceof Error ? cause.message : '标签删除失败') }
 }
 
 async function removeCategory(category: Category) {
   if (!window.confirm(`确定删除分类“${category.name}”吗？已有文章时后端应拒绝删除。`)) return
-  try { await api.deleteCategory(category.id); await load() } catch (cause) { error.value = cause instanceof Error ? cause.message : '分类删除失败' }
+  try {
+    await api.deleteCategory(category.id)
+    await Promise.all([load(), notifyPublicTaxonomiesChanged()])
+    toast.success('分类已删除')
+  } catch (cause) { toast.error(cause instanceof Error ? cause.message : '分类删除失败') }
 }
 
 onMounted(load)
@@ -55,7 +79,6 @@ onMounted(load)
 
 <template>
   <header class="admin-page-header"><div><h1>标签与分类</h1><p>保持内容结构简单、稳定且可维护。</p></div></header>
-  <p v-if="error" class="admin-error">{{ error }}</p>
   <div class="taxonomy-admin-grid">
     <section class="card admin-panel taxonomy-panel">
       <h2>标签</h2>

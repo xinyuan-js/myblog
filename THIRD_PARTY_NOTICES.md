@@ -30,7 +30,7 @@ SOFTWARE.
 
 ## Artalk
 
-The frontend uses the Artalk npm package and the deployment design uses the official Artalk Go image. Source reference: [ArtalkJS/Artalk](https://github.com/ArtalkJS/Artalk), inspected at commit `f875fc4023f02a6d774182459257fbbb0417585f`.
+The frontend uses the Artalk npm package and the deployment design uses the official Artalk Go image. The deployed image is pinned to the official nightly build from commit `75a35ccc9fb27dd561911ce69d81f34adec4c811`. Source reference: [ArtalkJS/Artalk](https://github.com/ArtalkJS/Artalk).
 
 ```text
 The MIT License (MIT)
@@ -55,3 +55,22 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## MinIO and MinIO Client
+
+`deploy/minio/Dockerfile` builds MinIO and MinIO Client (`mc`) from immutable upstream commits. MinIO is licensed under the GNU Affero General Public License v3.0; `mc` is licensed under the GNU General Public License v3.0. The corresponding source revisions are recorded directly in that Dockerfile:
+
+- MinIO: `9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a`;
+- MinIO Client: `77f82e18b5401a65958f1619df6ebb994634bd88`.
+
+The built image includes both upstream license files under `/licenses`. Source repositories:
+
+- https://github.com/minio/minio
+- https://github.com/minio/mc
+
+## gosu
+
+`deploy/mysql/Dockerfile` rebuilds gosu 1.19 from immutable upstream commit
+`6456aaa0f3c854d199d0f037f068eb97515b7513` with the pinned Go security
+toolchain. Its MIT license is copied into the image under `/licenses/gosu`.
+Source repository: https://github.com/tianon/gosu

@@ -8,6 +8,7 @@ export interface SiteProfile {
   bannerUrl: string | null
   authorName: string
   authorBio: string
+  aboutMarkdown: string
   socialLinks: Array<{
     label: string
     url: string
@@ -17,8 +18,16 @@ export interface SiteProfile {
 }
 
 export interface SiteAppearanceMutation {
+  title: string
+  subtitle: string
+  description: string
   avatarUrl: string | null
   bannerUrl: string | null
+  authorName: string
+  authorBio: string
+  aboutMarkdown: string
+  socialLinks: SiteProfile['socialLinks']
+  icpNumber: string | null
 }
 
 export interface Tag {
@@ -82,20 +91,34 @@ export interface PostQuery {
   pageSize?: number
   tag?: string
   category?: string
+  q?: string
   status?: PostStatus
 }
 
-export interface AdminUser {
+export interface AuthUser {
   githubId: number
   login: string
   name: string
   avatarUrl: string
+  isAdmin: boolean
+  isOwner: boolean
 }
 
 export interface AuthState {
   authenticated: boolean
-  user: AdminUser | null
+  user: AuthUser | null
   csrfToken: string | null
+}
+
+export interface Administrator {
+  githubId: number
+  isOwner: boolean
+  grantedAt: ISODateTime | null
+}
+
+export interface ArtalkSession {
+  token: string
+  user: Record<string, unknown>
 }
 
 export interface PostMutation {
@@ -127,7 +150,7 @@ export interface UploadResult {
 export type UploadStatus = 'active' | 'trashed'
 
 export interface UploadReference {
-  resourceType: 'site_avatar' | 'site_banner' | 'post_cover' | 'post_content'
+  resourceType: 'site_avatar' | 'site_banner' | 'site_about' | 'post_cover' | 'post_content'
   resourceId: number | null
   field: string
   label: string

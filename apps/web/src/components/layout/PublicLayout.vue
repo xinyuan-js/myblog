@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { useSite } from '@/composables/useSite'
+import { siteProfileUpdatedStorageKey, siteTaxonomiesUpdatedStorageKey, useSite } from '@/composables/useSite'
 import BackToTop from './BackToTop.vue'
 import SiteFooter from './SiteFooter.vue'
 import SiteNavbar from './SiteNavbar.vue'
 import SiteSidebar from './SiteSidebar.vue'
 
-const { profile, tags, categories, loaded, error: siteError, loadSite } = useSite()
+const { profile, tags, categories, loaded, error: siteError, loadSite, refreshSiteProfile, refreshTaxonomies } = useSite()
 const route = useRoute()
 const isHome = computed(() => route.name === 'home')
 const bannerEnabled = computed(() => Boolean(profile.value?.bannerUrl) || (!loaded.value && !siteError.value))
@@ -31,6 +31,18 @@ function scheduleScrollUpdate() {
   if (!scrollFrame) scrollFrame = window.requestAnimationFrame(updateScrollState)
 }
 
+function refreshPublicDataWhenVisible() {
+  if (document.visibilityState === 'visible') {
+    void refreshSiteProfile()
+    void refreshTaxonomies()
+  }
+}
+
+function handleSiteDataUpdate(event: StorageEvent) {
+  if (event.key === siteProfileUpdatedStorageKey) void refreshSiteProfile()
+  if (event.key === siteTaxonomiesUpdatedStorageKey) void refreshTaxonomies()
+}
+
 watch(() => profile.value?.bannerUrl, () => { bannerReady.value = false })
 watch([isHome, bannerEnabled], async () => {
   await nextTick()
@@ -41,10 +53,16 @@ onMounted(() => {
   updateScrollState()
   window.addEventListener('scroll', scheduleScrollUpdate, { passive: true })
   window.addEventListener('resize', scheduleScrollUpdate)
+  window.addEventListener('focus', refreshPublicDataWhenVisible)
+  window.addEventListener('storage', handleSiteDataUpdate)
+  document.addEventListener('visibilitychange', refreshPublicDataWhenVisible)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('scroll', scheduleScrollUpdate)
   window.removeEventListener('resize', scheduleScrollUpdate)
+  window.removeEventListener('focus', refreshPublicDataWhenVisible)
+  window.removeEventListener('storage', handleSiteDataUpdate)
+  document.removeEventListener('visibilitychange', refreshPublicDataWhenVisible)
   if (scrollFrame) window.cancelAnimationFrame(scrollFrame)
 })
 </script>
@@ -53,7 +71,7 @@ onBeforeUnmount(() => {
   <div class="public-layout" :class="{ 'is-home': isHome, 'with-banner': bannerEnabled }">
     <div class="navbar-region">
       <div class="navbar-wrapper" :class="{ hidden: navbarHidden }">
-        <SiteNavbar :title="profile?.title ?? '浮光'" />
+        <SiteNavbar :title="profile?.title ?? 'MyBlog'" />
       </div>
     </div>
 

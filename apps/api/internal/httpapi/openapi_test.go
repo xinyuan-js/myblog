@@ -12,10 +12,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xinyuan-js/myblog/apps/api/internal/auth"
-	"github.com/xinyuan-js/myblog/apps/api/internal/blog"
-	"github.com/xinyuan-js/myblog/apps/api/internal/config"
-	"github.com/xinyuan-js/myblog/apps/api/internal/upload"
+	"github.com/example/myblog/apps/api/internal/auth"
+	"github.com/example/myblog/apps/api/internal/blog"
+	"github.com/example/myblog/apps/api/internal/config"
+	"github.com/example/myblog/apps/api/internal/upload"
 )
 
 func TestOpenAPIOperationsMatchRegisteredRoutes(t *testing.T) {

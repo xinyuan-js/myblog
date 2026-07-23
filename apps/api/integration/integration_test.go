@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xinyuan-js/myblog/apps/api/internal/blog"
-	"github.com/xinyuan-js/myblog/apps/api/internal/config"
-	"github.com/xinyuan-js/myblog/apps/api/internal/database"
-	"github.com/xinyuan-js/myblog/apps/api/internal/upload"
+	"github.com/example/myblog/apps/api/internal/blog"
+	"github.com/example/myblog/apps/api/internal/config"
+	"github.com/example/myblog/apps/api/internal/database"
+	"github.com/example/myblog/apps/api/internal/upload"
 )
 
 type memoryObjects struct{ values map[string][]byte }
@@ -83,6 +83,10 @@ func TestMySQLBlogAndMediaLifecycle(t *testing.T) {
 	if err != nil || page.Pagination.Total != 1 {
 		t.Fatalf("public posts = %+v, %v", page, err)
 	}
+	searchPage, err := store.ListPublicPosts(context.Background(), blog.PublicPostQuery{Page: 1, PageSize: 10, Search: "第一篇"})
+	if err != nil || searchPage.Pagination.Total != 1 || len(searchPage.Items) != 1 || searchPage.Items[0].ID != post.ID {
+		t.Fatalf("fulltext search = %+v, %v", searchPage, err)
+	}
 	detail, err := store.PublicPost(context.Background(), post.Slug)
 	if err != nil || len(detail.Tags) != 1 {
 		t.Fatalf("public post = %+v, %v", detail, err)
@@ -124,14 +128,25 @@ func TestMySQLBlogAndMediaLifecycle(t *testing.T) {
 	if _, err := media.Restore(context.Background(), asset.ID); err != nil {
 		t.Fatal(err)
 	}
-	profile, err := store.UpdateSiteAppearance(context.Background(), blog.SiteAppearanceMutation{AvatarURL: &asset.URL})
+	currentProfile, err := store.SiteProfile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	siteMutation := blog.SiteAppearanceMutation{
+		Title: currentProfile.Title, Subtitle: currentProfile.Subtitle, Description: currentProfile.Description,
+		AvatarURL: &asset.URL, BannerURL: currentProfile.BannerURL,
+		AuthorName: currentProfile.AuthorName, AuthorBio: currentProfile.AuthorBio,
+		AboutMarkdown: currentProfile.AboutMarkdown, SocialLinks: currentProfile.SocialLinks, ICPNumber: currentProfile.ICPNumber,
+	}
+	profile, err := store.UpdateSiteAppearance(context.Background(), siteMutation)
 	if err != nil || profile.AvatarURL == nil {
 		t.Fatalf("site appearance = %+v, %v", profile, err)
 	}
 	if err := media.Trash(context.Background(), asset.ID); !errors.Is(err, upload.ErrInUse) {
 		t.Fatalf("site reference not protected: %v", err)
 	}
-	if _, err := store.UpdateSiteAppearance(context.Background(), blog.SiteAppearanceMutation{}); err != nil {
+	siteMutation.AvatarURL = nil
+	if _, err := store.UpdateSiteAppearance(context.Background(), siteMutation); err != nil {
 		t.Fatal(err)
 	}
 	if err := media.Trash(context.Background(), asset.ID); err != nil {
@@ -147,7 +162,7 @@ func TestMySQLBlogAndMediaLifecycle(t *testing.T) {
 
 func resetDatabase(t *testing.T, db *sql.DB) {
 	t.Helper()
-	_, err := db.Exec(`SET FOREIGN_KEY_CHECKS=0;TRUNCATE TABLE upload_references;TRUNCATE TABLE uploads;TRUNCATE TABLE post_tags;TRUNCATE TABLE posts;TRUNCATE TABLE tags;TRUNCATE TABLE categories;TRUNCATE TABLE admin_sessions;TRUNCATE TABLE oauth_states;SET FOREIGN_KEY_CHECKS=1;UPDATE site_settings SET avatar_url=NULL,banner_url=NULL WHERE id=1`)
+	_, err := db.Exec(`SET FOREIGN_KEY_CHECKS=0;TRUNCATE TABLE upload_references;TRUNCATE TABLE uploads;TRUNCATE TABLE post_tags;TRUNCATE TABLE posts;TRUNCATE TABLE tags;TRUNCATE TABLE categories;TRUNCATE TABLE user_sessions;TRUNCATE TABLE oauth_states;SET FOREIGN_KEY_CHECKS=1;UPDATE site_settings SET avatar_url=NULL,banner_url=NULL WHERE id=1`)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -56,6 +56,7 @@ coverage.out
 # Runtime data must be persisted outside Git
 /data/
 /uploads/
+/backups/
 /apps/api/uploads/
 
 # Temporary source image; the application uses apps/web/src/assets/home-background.png

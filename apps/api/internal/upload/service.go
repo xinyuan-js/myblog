@@ -21,8 +21,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/xinyuan-js/myblog/apps/api/internal/config"
-	"github.com/xinyuan-js/myblog/apps/api/internal/storage"
+	"github.com/example/myblog/apps/api/internal/config"
+	"github.com/example/myblog/apps/api/internal/storage"
 	_ "golang.org/x/image/webp"
 )
 

@@ -24,7 +24,7 @@
 - 站点公开信息；
 - 文章、标签、分类的公开查询；
 - 文章草稿、发布和定时发布；
-- GitHub 管理员登录和服务端会话；
+- GitHub 统一登录和服务端会话，按不可变数字 ID 授予管理权限；
 - 管理端文章、标签和分类 CRUD；
 - 封面、正文图片和附件上传；
 - 数据校验、权限校验、CSRF 和审计日志。
@@ -101,7 +101,7 @@ Go API 不建立评论表，不代理 Artalk 用户，不把 Artalk 管理接口
 | 400 | `INVALID_ARGUMENT` | 参数类型或格式错误 |
 | 400 | `VALIDATION_FAILED` | 表单字段校验失败 |
 | 401 | `AUTH_REQUIRED` | 未登录或会话失效 |
-| 403 | `ADMIN_REQUIRED` | GitHub 用户不是指定管理员 |
+| 403 | `ADMIN_REQUIRED` | 当前 GitHub 用户没有管理权限 |
 | 403 | `CSRF_INVALID` | CSRF Token 或 Origin 校验失败 |
 | 404 | `POST_NOT_FOUND` | 文章不存在或公开端不可见 |
 | 404 | `TAG_NOT_FOUND` | 标签不存在 |
@@ -131,7 +131,7 @@ Go API 不建立评论表，不代理 Artalk 用户，不把 Artalk 管理接口
 
 ```json
 {
-  "title": "浮光",
+  "title": "MyBlog",
   "subtitle": "把复杂的事情慢慢说清楚",
   "description": "记录工程实践、阅读笔记和生活。",
   "avatarUrl": "/uploads/site/avatar.webp",
@@ -329,7 +329,7 @@ GET /api/categories
 
 ## 6. GitHub 管理员认证
 
-管理端只提供 GitHub OAuth 登录，不提供用户名密码登录和用户注册。系统只允许环境变量 `ADMIN_GITHUB_ID` 指定的 GitHub 用户创建管理员会话。
+系统统一使用 GitHub OAuth 登录，不提供用户名密码登录和用户注册。环境变量 `ADMIN_GITHUB_ID` 指定站点所有者；所有者可在管理端按 GitHub 数字 ID维护授权管理员名单，只有所有者能变更该名单。
 
 ### 6.1 发起登录
 
@@ -339,12 +339,12 @@ GET /api/auth/github?return_to=/admin
 
 后端行为：
 
-1. 只接受站内 `/admin` 开头的 `return_to`，拒绝完整外部 URL，防止开放重定向；
+1. 只接受站内相对路径形式的 `return_to`，拒绝完整外部 URL，防止开放重定向；
 2. 生成至少 128 bit 随机 OAuth `state`；
 3. 将 `state`、`return_to` 和短过期时间保存在签名 Cookie 或服务端临时记录；
 4. 重定向到 GitHub OAuth。
 
-前端会把原管理页面作为 `return_to` 传入，例如未登录访问文章编辑页时，登录完成后返回同一编辑页。前端同样只接受 `/admin` 站内路径，但后端仍必须独立执行上述校验。
+前端会把原页面作为 `return_to` 传入，例如未登录访问文章编辑页时，管理员登录完成后返回同一编辑页。普通用户请求管理路径时后端改为返回首页。前后端都只接受站内相对路径，但后端仍必须独立执行上述校验。
 
 ### 6.2 OAuth 回调
 
@@ -357,7 +357,7 @@ GET /api/auth/github/callback?code=...&state=...
 - 校验 state 且只能使用一次；
 - 服务端使用 Client Secret 换取 GitHub Token；
 - 调用 GitHub 用户接口取得不可变数字 `id`；
-- 使用字符串或整数安全比较 `ADMIN_GITHUB_ID`；
+- 使用 GitHub 数字 ID 判断配置所有者或数据库中的授权管理员；
 - 不接受前端传入的管理员角色；
 - 登录完成后立即丢弃 GitHub Access Token，V1 不需要持久化；
 - 创建博客自己的随机会话；
@@ -366,7 +366,6 @@ GET /api/auth/github/callback?code=...&state=...
 失败时重定向 `/admin/login?error={code}`，前端识别以下稳定错误码：
 
 - `access_denied`：用户取消 GitHub 授权；
-- `not_authorized`：GitHub ID 不是配置的管理员；
 - `state_invalid`：state 缺失、过期或已使用；
 - `oauth_failed`：GitHub 换取 Token 或读取用户失败。
 
@@ -737,7 +736,7 @@ Artalk.init({
   pageKey: `/posts/${post.slug}`,
   pageTitle: post.title,
   server: '/comments',
-  site: '浮光',
+  site: 'MyBlog',
   locale: 'zh-CN',
   darkMode: isDark,
 })
@@ -810,7 +809,7 @@ V1 不需要 Redis、消息队列、微服务或通用插件系统。
 - [ ] 已发布文章修改 Slug 被拒绝；
 - [ ] 定时文章到时间后无需任务即可公开；
 - [ ] 文章和标签关联在事务失败时完整回滚；
-- [ ] 非管理员 GitHub ID 无法创建博客会话；
+- [ ] 普通 GitHub 用户可以创建评论会话，但访问管理接口返回 403；
 - [ ] OAuth state 不匹配、过期或重放均失败；
 - [ ] 管理 Cookie 满足 HttpOnly、Secure、SameSite=Lax；
 - [ ] 缺少或错误 CSRF Token 的写请求被拒绝；

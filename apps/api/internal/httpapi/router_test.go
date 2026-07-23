@@ -15,8 +15,8 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/gin-gonic/gin"
-	"github.com/xinyuan-js/myblog/apps/api/internal/auth"
-	"github.com/xinyuan-js/myblog/apps/api/internal/config"
+	"github.com/example/myblog/apps/api/internal/auth"
+	"github.com/example/myblog/apps/api/internal/config"
 )
 
 func newTestRouter(t *testing.T) *gin.Engine {
@@ -45,11 +45,13 @@ func TestAdminMiddlewareRequiresSessionAndCSRF(t *testing.T) {
 		cookie     bool
 		origin     string
 		csrf       string
+		storedID   uint64
 		wantStatus int
 	}{
 		{name: "missing session", wantStatus: http.StatusUnauthorized},
 		{name: "missing csrf", cookie: true, origin: "https://blog.example.com", wantStatus: http.StatusForbidden},
 		{name: "cross site origin", cookie: true, origin: "https://evil.example", csrf: csrfToken, wantStatus: http.StatusForbidden},
+		{name: "ordinary user", cookie: true, storedID: 87654321, origin: "https://blog.example.com", csrf: csrfToken, wantStatus: http.StatusForbidden},
 		{name: "valid request", cookie: true, origin: "https://blog.example.com", csrf: csrfToken, wantStatus: http.StatusNoContent},
 	}
 	for _, test := range tests {
@@ -64,10 +66,18 @@ func TestAdminMiddlewareRequiresSessionAndCSRF(t *testing.T) {
 				GitHubAdminID: 12345678, OAuthStateSecret: secret,
 			})
 			if test.cookie {
-				rows := sqlmock.NewRows([]string{"github_id", "github_login", "display_name", "avatar_url", "csrf_token_hash"}).
-					AddRow(uint64(12345678), "admin", "Admin", "https://example.com/avatar.png", csrfHash[:])
+				storedID := test.storedID
+				if storedID == 0 {
+					storedID = 12345678
+				}
+				rows := sqlmock.NewRows([]string{"github_id", "github_login", "display_name", "email", "avatar_url", "csrf_token_hash"}).
+					AddRow(storedID, "user", "User", "user@example.com", "https://example.com/avatar.png", csrfHash[:])
 				mock.ExpectQuery("SELECT github_id").WithArgs(tokenHash[:]).WillReturnRows(rows)
-				mock.ExpectExec("UPDATE admin_sessions SET last_seen_at").WithArgs(tokenHash[:]).WillReturnResult(sqlmock.NewResult(0, 1))
+				if storedID != 12345678 {
+					mock.ExpectQuery("SELECT EXISTS").WithArgs(storedID).
+						WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+				}
+				mock.ExpectExec("UPDATE user_sessions SET last_seen_at").WithArgs(tokenHash[:]).WillReturnResult(sqlmock.NewResult(0, 1))
 			}
 
 			router := gin.New()
@@ -89,8 +99,37 @@ func TestAdminMiddlewareRequiresSessionAndCSRF(t *testing.T) {
 			if response.Code != test.wantStatus {
 				t.Fatalf("status = %d, want %d, body = %s", response.Code, test.wantStatus, response.Body.String())
 			}
+			if response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatalf("Cache-Control = %q, want no-store", response.Header().Get("Cache-Control"))
+			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestOwnerMiddlewareRejectsDelegatedAdministrator(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		isOwner    bool
+		wantStatus int
+	}{
+		{name: "delegated administrator", wantStatus: http.StatusForbidden},
+		{name: "configured owner", isOwner: true, wantStatus: http.StatusNoContent},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			router := gin.New()
+			router.GET("/permissions", func(c *gin.Context) {
+				c.Set(adminSessionKey, auth.Session{User: auth.User{IsAdmin: true, IsOwner: test.isOwner}})
+				c.Next()
+			}, requireOwner(), func(c *gin.Context) {
+				c.Status(http.StatusNoContent)
+			})
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/permissions", nil))
+			if response.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d, body = %s", response.Code, test.wantStatus, response.Body.String())
 			}
 		})
 	}

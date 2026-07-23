@@ -9,14 +9,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/xinyuan-js/myblog/apps/api/internal/auth"
-	"github.com/xinyuan-js/myblog/apps/api/internal/blog"
-	"github.com/xinyuan-js/myblog/apps/api/internal/config"
-	"github.com/xinyuan-js/myblog/apps/api/internal/database"
-	"github.com/xinyuan-js/myblog/apps/api/internal/httpapi"
-	"github.com/xinyuan-js/myblog/apps/api/internal/server"
-	"github.com/xinyuan-js/myblog/apps/api/internal/storage"
-	"github.com/xinyuan-js/myblog/apps/api/internal/upload"
+	"github.com/example/myblog/apps/api/internal/auth"
+	"github.com/example/myblog/apps/api/internal/blog"
+	"github.com/example/myblog/apps/api/internal/config"
+	"github.com/example/myblog/apps/api/internal/database"
+	"github.com/example/myblog/apps/api/internal/httpapi"
+	"github.com/example/myblog/apps/api/internal/server"
+	"github.com/example/myblog/apps/api/internal/storage"
+	"github.com/example/myblog/apps/api/internal/upload"
 )
 
 func main() {
@@ -42,6 +42,20 @@ func main() {
 	}
 	blogStore := blog.NewStore(db, cfg.MediaPublicURL)
 	authService := auth.NewService(db, cfg)
+	artalkDB, err := sql.Open("mysql", cfg.ArtalkDatabaseDSN)
+	if err != nil {
+		logger.Error("open Artalk database", "error", err)
+		os.Exit(1)
+	}
+	defer artalkDB.Close()
+	artalkDB.SetMaxOpenConns(3)
+	artalkDB.SetMaxIdleConns(1)
+	artalkDB.SetConnMaxLifetime(30 * time.Minute)
+	if err := artalkDB.PingContext(startupContext); err != nil {
+		logger.Error("connect Artalk database", "error", err)
+		os.Exit(1)
+	}
+	authService.SetArtalkDatabase(artalkDB)
 	minioStore, err := storage.NewMinIO(cfg)
 	if err != nil {
 		logger.Error("create MinIO client", "error", err)
@@ -79,7 +93,7 @@ func runMaintenance(ctx context.Context, db interface {
 	run := func() {
 		maintenanceContext, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
-		if _, err := db.ExecContext(maintenanceContext, `DELETE FROM admin_sessions WHERE expires_at <= UTC_TIMESTAMP(6)`); err != nil {
+		if _, err := db.ExecContext(maintenanceContext, `DELETE FROM user_sessions WHERE expires_at <= UTC_TIMESTAMP(6)`); err != nil {
 			logger.Error("clean expired sessions", "error", err)
 		}
 		if _, err := db.ExecContext(maintenanceContext, `DELETE FROM oauth_states WHERE expires_at <= UTC_TIMESTAMP(6)`); err != nil {

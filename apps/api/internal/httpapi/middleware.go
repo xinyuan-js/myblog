@@ -3,6 +3,7 @@ package httpapi
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
@@ -43,7 +44,7 @@ func recoveryMiddleware(logger *slog.Logger) gin.HandlerFunc {
 			if recovered := recover(); recovered != nil {
 				logger.Error("panic recovered",
 					"requestId", requestIDFromContext(c),
-					"panic", recovered,
+					"panicType", fmt.Sprintf("%T", recovered),
 					"stack", string(debug.Stack()),
 				)
 				writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "服务器内部错误")

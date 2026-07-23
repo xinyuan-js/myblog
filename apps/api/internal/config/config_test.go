@@ -65,6 +65,7 @@ func TestValidateRejectsUnsafeURLAndCredentialConfiguration(t *testing.T) {
 		AppOrigin: "https://blog.example.com", GitHubClientID: "id", GitHubClientSecret: "secret", GitHubAdminID: 1,
 		GitHubCallbackURL: "https://blog.example.com/api/auth/github/callback", OAuthStateSecret: "0123456789abcdef0123456789abcdef",
 		SessionCookieName: "blog_session", SessionSecure: true, SessionTTL: time.Hour,
+		ArtalkDatabaseDSN: "artalk-dsn", ArtalkInternalURL: "http://artalk:23366",
 		MinIOEndpoint: "minio:9000", MinIOAccessKey: "access", MinIOSecretKey: "0123456789abcdef0123456789abcdef",
 		MinIOBucket: "blog-media", MediaPublicURL: "/uploads",
 	}
@@ -76,8 +77,13 @@ func TestValidateRejectsUnsafeURLAndCredentialConfiguration(t *testing.T) {
 		{name: "callback other origin", mutate: func(c *Config) { c.GitHubCallbackURL = "https://evil.example/api/auth/github/callback" }},
 		{name: "callback wrong path", mutate: func(c *Config) { c.GitHubCallbackURL = "https://blog.example.com/callback" }},
 		{name: "cookie injection", mutate: func(c *Config) { c.SessionCookieName = "session; evil" }},
+		{name: "invalid Artalk URL", mutate: func(c *Config) { c.ArtalkInternalURL = "file:///tmp/artalk" }},
 		{name: "invalid MinIO endpoint", mutate: func(c *Config) { c.MinIOEndpoint = "minio:not-a-port" }},
 		{name: "short MinIO secret", mutate: func(c *Config) { c.MinIOSecretKey = "short" }},
+		{name: "placeholder OAuth secret", mutate: func(c *Config) { c.OAuthStateSecret = "replace-with-at-least-32-random-characters" }},
+		{name: "placeholder MinIO access", mutate: func(c *Config) { c.MinIOAccessKey = "replace-with-random-minio-access" }},
+		{name: "placeholder MinIO secret", mutate: func(c *Config) { c.MinIOSecretKey = "replace-with-at-least-32-random-characters" }},
+		{name: "excessive session lifetime", mutate: func(c *Config) { c.SessionTTL = 31 * 24 * time.Hour }},
 		{name: "media traversal", mutate: func(c *Config) { c.MediaPublicURL = "/uploads/../private" }},
 	}
 	for _, test := range tests {

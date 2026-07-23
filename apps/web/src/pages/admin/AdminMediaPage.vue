@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { api } from '@/services/api'
 import type { MediaItem, UploadStatus } from '@/types/blog'
 import { useDocumentMeta } from '@/composables/useDocumentMeta'
+import { useAdminToast } from '@/composables/useAdminToast'
 
 const items = ref<MediaItem[]>([])
 const status = ref<UploadStatus>('active')
@@ -13,23 +14,22 @@ const totalPages = ref(1)
 const total = ref(0)
 const loading = ref(false)
 const uploading = ref(false)
-const error = ref<string | null>(null)
 const selected = ref<MediaItem | null>(null)
 const copied = ref<number | null>(null)
 const title = computed(() => status.value === 'active' ? '媒体库' : '媒体回收站')
 useDocumentMeta('媒体库')
+const toast = useAdminToast()
 
 async function load(resetPage = false) {
   if (resetPage) page.value = 1
   loading.value = true
-  error.value = null
   try {
     const result = await api.listUploads({ page: page.value, pageSize: 24, status: status.value, usage: usage.value, q: search.value.trim() || undefined })
     items.value = result.items
     total.value = result.pagination.total
     totalPages.value = result.pagination.totalPages
     if (selected.value) selected.value = items.value.find((item) => item.id === selected.value?.id) ?? null
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : '媒体加载失败' }
+  } catch (cause) { toast.error(cause instanceof Error ? cause.message : '媒体加载失败') }
   finally { loading.value = false }
 }
 
@@ -38,35 +38,40 @@ async function uploadFiles(event: Event) {
   const files = [...(input.files ?? [])]
   if (!files.length || uploading.value) return
   uploading.value = true
-  error.value = null
   try {
     for (const file of files) await api.upload(file)
     status.value = 'active'; await load(true)
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : '上传失败' }
+    toast.success(files.length === 1 ? '图片上传成功' : `${files.length} 张图片上传成功`)
+  } catch (cause) { toast.error(cause instanceof Error ? cause.message : '上传失败') }
   finally { uploading.value = false; input.value = '' }
 }
 
 async function copyURL(item: MediaItem) {
-  await navigator.clipboard.writeText(new URL(item.url, window.location.origin).href)
-  copied.value = item.id
-  window.setTimeout(() => { if (copied.value === item.id) copied.value = null }, 1500)
+  try {
+    await navigator.clipboard.writeText(new URL(item.url, window.location.origin).href)
+    copied.value = item.id
+    toast.success('图片 URL 已复制')
+    window.setTimeout(() => { if (copied.value === item.id) copied.value = null }, 1500)
+  } catch {
+    toast.error('复制失败，请检查浏览器剪贴板权限')
+  }
 }
 
 async function trash(item: MediaItem) {
   if (item.usageCount > 0 || !window.confirm(`将“${item.filename}”移入回收站吗？`)) return
-  try { await api.trashUpload(item.id); selected.value = null; await load() }
-  catch (cause) { error.value = cause instanceof Error ? cause.message : '移入回收站失败' }
+  try { await api.trashUpload(item.id); selected.value = null; await load(); toast.success('图片已移入回收站') }
+  catch (cause) { toast.error(cause instanceof Error ? cause.message : '移入回收站失败') }
 }
 
 async function restore(item: MediaItem) {
-  try { await api.restoreUpload(item.id); selected.value = null; await load() }
-  catch (cause) { error.value = cause instanceof Error ? cause.message : '恢复失败' }
+  try { await api.restoreUpload(item.id); selected.value = null; await load(); toast.success('图片已恢复') }
+  catch (cause) { toast.error(cause instanceof Error ? cause.message : '恢复失败') }
 }
 
 async function removePermanent(item: MediaItem) {
   if (!window.confirm(`永久删除“${item.filename}”及其 MinIO 对象？此操作不可恢复。`)) return
-  try { await api.deleteUploadPermanent(item.id); selected.value = null; await load() }
-  catch (cause) { error.value = cause instanceof Error ? cause.message : '永久删除失败' }
+  try { await api.deleteUploadPermanent(item.id); selected.value = null; await load(); toast.success('图片已永久删除') }
+  catch (cause) { toast.error(cause instanceof Error ? cause.message : '永久删除失败') }
 }
 
 async function movePage(direction: number) { page.value += direction; await load() }
@@ -78,7 +83,6 @@ onMounted(() => load())
     <div><h1>{{ title }}</h1><p>MinIO 中共有 {{ total }} 个{{ status === 'active' ? '可用' : '待清理' }}媒体文件。</p></div>
     <label class="button primary upload-button"><input class="sr-only" type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif" :disabled="uploading" @change="uploadFiles" />{{ uploading ? '上传中…' : '上传图片' }}</label>
   </header>
-  <p v-if="error" class="admin-error" role="alert">{{ error }}</p>
   <section class="card admin-panel media-toolbar">
     <input v-model="search" class="admin-input" type="search" maxlength="100" placeholder="搜索原始文件名" @keyup.enter="load(true)" />
     <select v-model="usage" class="admin-select" @change="load(true)"><option value="all">全部用途</option><option value="used">使用中</option><option value="unused">未使用</option></select>

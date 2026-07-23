@@ -30,10 +30,10 @@
 
 | 需求 | 实现证据 | 状态 |
 | --- | --- | --- |
-| GitHub 管理员登录 | `AdminLoginPage.vue`、`githubLoginUrl`，保留并校验 `returnTo` | 完成 |
-| 不开放注册 | 无注册路由或接口，登录页明确仅限配置的管理员 | 完成 |
+| GitHub 统一登录 | `AdminLoginPage.vue`、`githubLoginUrl`，保留并校验站内 `returnTo`；普通用户评论，管理员额外进入管理端 | 完成 |
+| 不开放注册 | 无注册路由或接口，所有用户统一使用 GitHub 登录 | 完成 |
 | 登录状态与路由保护 | Router Guard；网络失败仍可打开登录页；未登录保留原管理路径 | 完成 |
-| OAuth 错误反馈 | 登录页识别取消授权、非管理员、state 失效和 GitHub 失败 | 完成 |
+| OAuth 错误反馈 | 登录页识别取消授权、state 失效和 GitHub 失败 | 完成 |
 | 退出登录 | `AdminLayout.vue`；清理模拟会话或服务端会话并返回登录页 | 完成 |
 | 文章列表 | `AdminPostsPage.vue` | 完成 |
 | 创建文章 | `AdminPostEditorPage.vue` | 完成 |

@@ -28,7 +28,7 @@ async function load() {
   loading.value = true
   error.value = null
   try {
-    const nextResult = await api.listPosts({ page: page.value, pageSize: 8 })
+    const nextResult = await api.listPosts({ page: page.value, pageSize: 5 })
     if (currentRequest !== requestId) return
     const lastPage = Math.max(1, nextResult.pagination.totalPages)
     if (page.value > lastPage) {

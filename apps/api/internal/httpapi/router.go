@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/xinyuan-js/myblog/apps/api/internal/auth"
-	"github.com/xinyuan-js/myblog/apps/api/internal/config"
-	"github.com/xinyuan-js/myblog/apps/api/internal/upload"
+	"github.com/example/myblog/apps/api/internal/auth"
+	"github.com/example/myblog/apps/api/internal/config"
+	"github.com/example/myblog/apps/api/internal/upload"
 )
 
 type Dependencies struct {
@@ -77,9 +77,12 @@ func NewRouter(cfg config.Config, logger *slog.Logger, dependency ...Dependencie
 		api.GET("/auth/github/callback", authRateLimit, authHTTP.githubCallback)
 		api.GET("/auth/me", authHTTP.me)
 		api.POST("/auth/logout", authHTTP.logout)
+		api.POST("/auth/artalk/session", authRateLimit, authHTTP.artalkSession)
+		router.GET("/internal/artalk-oidc/userinfo", authHTTP.artalkUserInfo)
 	}
 	if deps.Auth != nil && deps.AdminStore != nil {
 		adminHTTP := adminHandler{store: deps.AdminStore, logger: logger}
+		administratorHTTP := administratorHandler{service: deps.Auth, logger: logger}
 		admin := api.Group("/admin", requireAdmin(deps.Auth, logger))
 		admin.GET("/posts", adminHTTP.posts)
 		admin.GET("/posts/:id", adminHTTP.post)
@@ -95,6 +98,9 @@ func NewRouter(cfg config.Config, logger *slog.Logger, dependency ...Dependencie
 		admin.PUT("/categories/:id", requireCSRF(deps.Auth), adminHTTP.updateCategory)
 		admin.DELETE("/categories/:id", requireCSRF(deps.Auth), adminHTTP.deleteCategory)
 		admin.PUT("/site/appearance", requireCSRF(deps.Auth), adminHTTP.updateSiteAppearance)
+		admin.GET("/administrators", requireOwner(), administratorHTTP.list)
+		admin.POST("/administrators", requireOwner(), requireCSRF(deps.Auth), administratorHTTP.add)
+		admin.DELETE("/administrators/:githubId", requireOwner(), requireCSRF(deps.Auth), administratorHTTP.remove)
 	}
 	if deps.Auth != nil && deps.Uploads != nil {
 		uploadHTTP := uploadHandler{service: deps.Uploads, logger: logger}

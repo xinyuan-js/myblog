@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
-	"github.com/xinyuan-js/myblog/apps/api/internal/upload"
+	"github.com/example/myblog/apps/api/internal/upload"
 )
 
 type uploadHandler struct {

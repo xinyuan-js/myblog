@@ -105,7 +105,7 @@ npm run type-check
 npm test
 VITE_USE_MOCK_API=false \
 VITE_ARTALK_SERVER=/comments \
-VITE_ARTALK_SITE=浮光 \
+VITE_ARTALK_SITE=MyBlog \
 npm run build
 ```
 

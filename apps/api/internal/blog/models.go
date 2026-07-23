@@ -9,15 +9,16 @@ type SocialLink struct {
 }
 
 type SiteProfile struct {
-	Title       string       `json:"title"`
-	Subtitle    string       `json:"subtitle"`
-	Description string       `json:"description"`
-	AvatarURL   *string      `json:"avatarUrl"`
-	BannerURL   *string      `json:"bannerUrl"`
-	AuthorName  string       `json:"authorName"`
-	AuthorBio   string       `json:"authorBio"`
-	SocialLinks []SocialLink `json:"socialLinks"`
-	ICPNumber   *string      `json:"icpNumber"`
+	Title         string       `json:"title"`
+	Subtitle      string       `json:"subtitle"`
+	Description   string       `json:"description"`
+	AvatarURL     *string      `json:"avatarUrl"`
+	BannerURL     *string      `json:"bannerUrl"`
+	AuthorName    string       `json:"authorName"`
+	AuthorBio     string       `json:"authorBio"`
+	AboutMarkdown string       `json:"aboutMarkdown"`
+	SocialLinks   []SocialLink `json:"socialLinks"`
+	ICPNumber     *string      `json:"icpNumber"`
 }
 
 type Tag struct {
@@ -79,6 +80,7 @@ type PublicPostQuery struct {
 	PageSize     int
 	TagSlug      string
 	CategorySlug string
+	Search       string
 }
 
 type AdminPostQuery struct {
@@ -106,6 +108,14 @@ type TaxonomyMutation struct {
 }
 
 type SiteAppearanceMutation struct {
-	AvatarURL *string `json:"avatarUrl"`
-	BannerURL *string `json:"bannerUrl"`
+	Title         string       `json:"title"`
+	Subtitle      string       `json:"subtitle"`
+	Description   string       `json:"description"`
+	AvatarURL     *string      `json:"avatarUrl"`
+	BannerURL     *string      `json:"bannerUrl"`
+	AuthorName    string       `json:"authorName"`
+	AuthorBio     string       `json:"authorBio"`
+	AboutMarkdown string       `json:"aboutMarkdown"`
+	SocialLinks   []SocialLink `json:"socialLinks"`
+	ICPNumber     *string      `json:"icpNumber"`
 }
