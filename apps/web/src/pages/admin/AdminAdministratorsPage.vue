@@ -38,7 +38,9 @@ async function add() {
     await api.addAdministrator(value)
     githubId.value = ''
     await load()
-    toast.success('管理员权限已添加')
+    const added = administrators.value.find((item) => item.githubId === value)
+    if (added?.hasSignedIn) toast.success(`已添加 @${added.login} 为管理员`)
+    else toast.info('权限已添加，但该 ID 尚未登录本站；请再次核对数字 ID，避免误授权')
   } catch (cause) {
     toast.error(cause instanceof Error ? cause.message : '添加管理员失败')
   } finally {
@@ -101,10 +103,19 @@ async function remove(item: Administrator) {
     <div v-if="loading" class="loading-state">正在读取权限…</div>
     <div v-else class="admin-table-wrap">
       <table class="admin-table">
-        <thead><tr><th>GitHub 用户 ID</th><th>权限类型</th><th>添加时间</th><th>操作</th></tr></thead>
+        <thead><tr><th>GitHub 用户</th><th>权限类型</th><th>添加时间</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-for="item in administrators" :key="item.githubId">
-            <td><strong>{{ item.githubId }}</strong></td>
+            <td>
+              <div v-if="item.hasSignedIn" class="administrator-identity">
+                <img v-if="item.avatarUrl" :src="item.avatarUrl" alt="" />
+                <span><strong>{{ item.name || item.login }}</strong><small>@{{ item.login }} · {{ item.githubId }}</small></span>
+              </div>
+              <div v-else class="unknown-identity">
+                <strong>{{ item.githubId }}</strong>
+                <small>尚未登录本站，请核对 ID</small>
+              </div>
+            </td>
             <td><span class="status-badge" :class="{ owner: item.isOwner }">{{ item.isOwner ? '站点所有者' : '管理员' }}</span></td>
             <td>{{ item.grantedAt ? new Date(item.grantedAt).toLocaleString('zh-CN') : '服务器配置' }}</td>
             <td>
@@ -132,6 +143,13 @@ async function remove(item: Administrator) {
 .panel-heading > span,
 .protected { color: var(--text-muted); font-size: 0.78rem; }
 .status-badge.owner { color: var(--primary-strong); }
+.administrator-identity { display: flex; align-items: center; gap: 0.65rem; }
+.administrator-identity img { width: 2rem; height: 2rem; border-radius: 50%; object-fit: cover; }
+.administrator-identity span,
+.unknown-identity { display: grid; gap: 0.15rem; }
+.administrator-identity small,
+.unknown-identity small { color: var(--text-muted); font-size: 0.72rem; font-weight: 500; }
+.unknown-identity small { color: oklch(.6 .14 65); }
 .button.danger { color: oklch(.58 .18 25); }
 @media (max-width: 720px) {
   .permission-panel { grid-template-columns: 1fr; gap: 1rem; }

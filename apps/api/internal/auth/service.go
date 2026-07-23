@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/example/myblog/apps/api/internal/config"
@@ -52,6 +53,7 @@ type Service struct {
 	cfg      config.Config
 	client   *http.Client
 	now      func() time.Time
+	roleMu   sync.Mutex
 }
 
 func NewService(db *sql.DB, cfg config.Config) *Service {
@@ -79,7 +81,7 @@ func (s *Service) AppURL(path string) string {
 	return strings.TrimSuffix(s.cfg.AppOrigin, "/") + path
 }
 
-func (s *Service) BeginLogin(returnTo string) (authorizeURL string, cookie *http.Cookie, err error) {
+func (s *Service) BeginLogin(ctx context.Context, returnTo string) (authorizeURL string, cookie *http.Cookie, err error) {
 	if !s.Configured() {
 		return "", nil, ErrNotConfigured
 	}
@@ -91,7 +93,7 @@ func (s *Service) BeginLogin(returnTo string) (authorizeURL string, cookie *http
 		Nonce: nonce, ReturnTo: sanitizeReturnTo(returnTo), ExpiresAt: s.now().UTC().Add(10 * time.Minute).Unix(),
 	}
 	nonceHash := sha256.Sum256([]byte(nonce))
-	if _, err := s.db.Exec(`
+	if _, err := s.db.ExecContext(ctx, `
 		INSERT INTO oauth_states (nonce_hash, expires_at) VALUES (?, ?)
 	`, nonceHash[:], time.Unix(state.ExpiresAt, 0).UTC()); err != nil {
 		return "", nil, fmt.Errorf("store oauth state: %w", err)
@@ -188,12 +190,17 @@ func (s *Service) Authenticate(ctx context.Context, cookieValue string) (Session
 	var session Session
 	var githubID uint64
 	var storedCSRFHash []byte
+	var refreshLastSeen bool
 	err := s.db.QueryRowContext(ctx, `
-		SELECT github_id, github_login, display_name, email, avatar_url, csrf_token_hash
-		FROM user_sessions
-		WHERE token_hash = ? AND expires_at > UTC_TIMESTAMP(6)
+		SELECT session.github_id, current_user.github_login, current_user.display_name,
+		       current_user.email, current_user.avatar_url, session.csrf_token_hash,
+		       session.last_seen_at <= UTC_TIMESTAMP(6) - INTERVAL 5 MINUTE AS refresh_last_seen
+		FROM user_sessions AS session
+		INNER JOIN github_users AS current_user ON current_user.github_id = session.github_id
+		WHERE session.token_hash = ? AND session.expires_at > UTC_TIMESTAMP(6)
 	`, tokenHash[:]).Scan(
-		&githubID, &session.User.Login, &session.User.Name, &session.User.Email, &session.User.AvatarURL, &storedCSRFHash,
+		&githubID, &session.User.Login, &session.User.Name, &session.User.Email, &session.User.AvatarURL,
+		&storedCSRFHash, &refreshLastSeen,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, ErrUnauthenticated
@@ -218,7 +225,16 @@ func (s *Service) Authenticate(ctx context.Context, cookieValue string) (Session
 	session.CSRFToken = csrf
 	session.TokenHash = tokenHash
 	session.rawToken = token
-	_, _ = s.db.ExecContext(ctx, `UPDATE user_sessions SET last_seen_at = UTC_TIMESTAMP(6) WHERE token_hash = ?`, tokenHash[:])
+	if refreshLastSeen {
+		// Avoid turning every authenticated read (especially Artalk polling)
+		// into a database write. The predicate also makes concurrent refreshes
+		// idempotent after the first request advances the timestamp.
+		_, _ = s.db.ExecContext(ctx, `
+			UPDATE user_sessions
+			SET last_seen_at = UTC_TIMESTAMP(6)
+			WHERE token_hash = ? AND last_seen_at <= UTC_TIMESTAMP(6) - INTERVAL 5 MINUTE
+		`, tokenHash[:])
+	}
 	return session, nil
 }
 
@@ -392,7 +408,19 @@ func (s *Service) fetchVerifiedGitHubEmail(ctx context.Context, accessToken stri
 }
 
 func (s *Service) createSession(ctx context.Context, user User) (Session, error) {
-	if _, err := s.db.ExecContext(ctx, `
+	token, err := randomToken(32)
+	if err != nil {
+		return Session{}, err
+	}
+	csrf := s.csrfToken(token)
+	tokenHash, csrfHash := sha256.Sum256([]byte(token)), sha256.Sum256([]byte(csrf))
+	now := s.now().UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Session{}, fmt.Errorf("begin user session: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO github_users (github_id, github_login, display_name, email, avatar_url)
 		VALUES (?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE
@@ -403,19 +431,15 @@ func (s *Service) createSession(ctx context.Context, user User) (Session, error)
 	`, user.GitHubID, user.Login, user.Name, user.Email, user.AvatarURL); err != nil {
 		return Session{}, fmt.Errorf("remember github user: %w", err)
 	}
-	token, err := randomToken(32)
-	if err != nil {
-		return Session{}, err
-	}
-	csrf := s.csrfToken(token)
-	tokenHash, csrfHash := sha256.Sum256([]byte(token)), sha256.Sum256([]byte(csrf))
-	now := s.now().UTC()
-	if _, err := s.db.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO user_sessions
 		(token_hash, csrf_token_hash, github_id, github_login, display_name, email, avatar_url, expires_at, last_seen_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, tokenHash[:], csrfHash[:], user.GitHubID, user.Login, user.Name, user.Email, user.AvatarURL, now.Add(s.cfg.SessionTTL), now); err != nil {
 		return Session{}, fmt.Errorf("create user session: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return Session{}, fmt.Errorf("commit user session: %w", err)
 	}
 	return Session{User: user, CSRFToken: csrf, TokenHash: tokenHash, rawToken: token}, nil
 }

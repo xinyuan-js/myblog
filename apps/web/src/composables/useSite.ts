@@ -14,15 +14,25 @@ const loaded = ref(false)
 const error = ref<string | null>(null)
 let refreshingProfile: Promise<void> | null = null
 let refreshingTaxonomies: Promise<void> | null = null
+let profileRefreshedAt = 0
+let taxonomiesRefreshedAt = 0
+
+export const backgroundRefreshIntervalMs = 30_000
+
+export function backgroundRefreshDue(lastRefresh: number, now = Date.now()) {
+  return lastRefresh <= 0 || now < lastRefresh || now - lastRefresh >= backgroundRefreshIntervalMs
+}
 
 export function useSite() {
   function setSiteProfile(value: SiteProfile) {
     profile.value = sanitizeSiteProfile(value)
     loaded.value = true
+    profileRefreshedAt = Date.now()
   }
 
-  async function refreshSiteProfile() {
+  async function refreshSiteProfile(options: { force?: boolean } = {}) {
     if (refreshingProfile) return refreshingProfile
+    if (options.force === false && !backgroundRefreshDue(profileRefreshedAt)) return
     refreshingProfile = (async () => {
       try {
         setSiteProfile(await api.getSiteProfile())
@@ -36,13 +46,15 @@ export function useSite() {
     return refreshingProfile
   }
 
-  async function refreshTaxonomies() {
+  async function refreshTaxonomies(options: { force?: boolean } = {}) {
     if (refreshingTaxonomies) return refreshingTaxonomies
+    if (options.force === false && !backgroundRefreshDue(taxonomiesRefreshedAt)) return
     refreshingTaxonomies = (async () => {
       try {
         const [tagsValue, categoriesValue] = await Promise.all([api.listTags(), api.listCategories()])
         tags.value = tagsValue
         categories.value = categoriesValue
+        taxonomiesRefreshedAt = Date.now()
         error.value = null
       } catch (cause) {
         error.value = cause instanceof Error ? cause.message : '分类与标签加载失败'
@@ -66,6 +78,9 @@ export function useSite() {
       profile.value = sanitizeSiteProfile(profileValue)
       tags.value = tagsValue
       categories.value = categoriesValue
+      const refreshedAt = Date.now()
+      profileRefreshedAt = refreshedAt
+      taxonomiesRefreshedAt = refreshedAt
       loaded.value = true
     } catch (cause) {
       error.value = cause instanceof Error ? cause.message : '站点信息加载失败'

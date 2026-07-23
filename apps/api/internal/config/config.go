@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	mysqldriver "github.com/go-sql-driver/mysql"
 )
 
 const (
@@ -64,7 +66,7 @@ func Load() (Config, error) {
 		IdleTimeout:        60 * time.Second,
 		ShutdownTimeout:    10 * time.Second,
 		TrustedProxies:     splitCSV(os.Getenv("TRUSTED_PROXIES")),
-		DatabaseDSN:        envOrDefault("DATABASE_DSN", "blog:blog@tcp(127.0.0.1:3306)/blog?charset=utf8mb4&parseTime=true&loc=UTC&multiStatements=true"),
+		DatabaseDSN:        envOrDefault("DATABASE_DSN", "blog:blog@tcp(127.0.0.1:3306)/blog?charset=utf8mb4&parseTime=true&loc=UTC&multiStatements=true&timeout=5s&readTimeout=10s&writeTimeout=10s"),
 		DatabaseMaxOpen:    10,
 		DatabaseMaxIdle:    5,
 		DatabaseMaxLife:    30 * time.Minute,
@@ -78,7 +80,7 @@ func Load() (Config, error) {
 		SessionTTL:         7 * 24 * time.Hour,
 		CommentDailyLimit:  20,
 		CommentDayOffset:   8,
-		ArtalkDatabaseDSN:  envOrDefault("ARTALK_DATABASE_DSN", "artalk:artalk@tcp(127.0.0.1:3306)/artalk?charset=utf8mb4&parseTime=true&loc=UTC"),
+		ArtalkDatabaseDSN:  envOrDefault("ARTALK_DATABASE_DSN", "artalk:artalk@tcp(127.0.0.1:3306)/artalk?charset=utf8mb4&parseTime=true&loc=UTC&timeout=5s&readTimeout=10s&writeTimeout=10s"),
 		ArtalkInternalURL:  strings.TrimSuffix(envOrDefault("ARTALK_INTERNAL_URL", "http://127.0.0.1:23366"), "/"),
 		MinIOEndpoint:      envOrDefault("MINIO_ENDPOINT", "127.0.0.1:9000"),
 		MinIOAccessKey:     envOrDefault("MINIO_ACCESS_KEY", "minioadmin"),
@@ -163,11 +165,11 @@ func (c Config) Validate() error {
 			return fmt.Errorf("%s must be greater than zero", name)
 		}
 	}
-	if strings.TrimSpace(c.DatabaseDSN) == "" {
-		return errors.New("DATABASE_DSN must not be empty")
+	if err := validateDatabaseDSN("DATABASE_DSN", c.DatabaseDSN, true, c.Environment == Production); err != nil {
+		return err
 	}
-	if strings.TrimSpace(c.ArtalkDatabaseDSN) == "" {
-		return errors.New("ARTALK_DATABASE_DSN must not be empty")
+	if err := validateDatabaseDSN("ARTALK_DATABASE_DSN", c.ArtalkDatabaseDSN, false, c.Environment == Production); err != nil {
+		return err
 	}
 	if c.DatabaseMaxOpen < 1 {
 		return errors.New("DATABASE_MAX_OPEN must be at least 1")
@@ -253,6 +255,37 @@ func validProductionCredential(value string, minimum int) bool {
 
 func validProductionSecret(value string) bool {
 	return validProductionCredential(value, 32)
+}
+
+func validateDatabaseDSN(name, value string, requireMultiStatements, production bool) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s must not be empty", name)
+	}
+	parsed, err := mysqldriver.ParseDSN(value)
+	if err != nil {
+		return fmt.Errorf("%s must be a valid MySQL DSN", name)
+	}
+	if !parsed.ParseTime {
+		return fmt.Errorf("%s must enable parseTime", name)
+	}
+	if parsed.Loc == nil || parsed.Loc.String() != time.UTC.String() {
+		return fmt.Errorf("%s must use loc=UTC", name)
+	}
+	if requireMultiStatements && !parsed.MultiStatements {
+		return fmt.Errorf("%s must enable multiStatements for schema migrations", name)
+	}
+	if production {
+		if parsed.Net != "tcp" || parsed.Addr == "" || parsed.User == "" {
+			return fmt.Errorf("%s must use an authenticated TCP connection in production", name)
+		}
+		if !validProductionSecret(parsed.Passwd) {
+			return fmt.Errorf("%s must use a non-placeholder password with at least 32 characters in production", name)
+		}
+		if parsed.Timeout <= 0 || parsed.ReadTimeout <= 0 || parsed.WriteTimeout <= 0 {
+			return fmt.Errorf("%s must set non-zero timeout, readTimeout and writeTimeout in production", name)
+		}
+	}
+	return nil
 }
 
 func validPublicMediaURL(value string) bool {

@@ -13,8 +13,6 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
-	"io"
-	"mime/multipart"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -26,7 +24,11 @@ import (
 	_ "golang.org/x/image/webp"
 )
 
-const MaxSize = 10 << 20
+const (
+	MaxSize       = 10 << 20
+	maxImageEdge  = 12000
+	maxImagePixel = 40_000_000
+)
 
 var (
 	ErrTooLarge        = errors.New("upload is too large")
@@ -76,6 +78,12 @@ type ListQuery struct {
 	Status, Usage, Search string
 }
 
+type Input struct {
+	Filename            string
+	DeclaredContentType string
+	Body                []byte
+}
+
 type Service struct {
 	db        *sql.DB
 	objects   storage.ObjectStore
@@ -87,20 +95,12 @@ func NewService(db *sql.DB, objects storage.ObjectStore, cfg config.Config) *Ser
 	return &Service{db: db, objects: objects, publicURL: strings.TrimSuffix(cfg.MediaPublicURL, "/"), now: time.Now}
 }
 
-func (s *Service) Create(ctx context.Context, header *multipart.FileHeader, createdBy uint64) (Item, error) {
-	filename := filepath.Base(strings.TrimSpace(header.Filename))
+func (s *Service) Create(ctx context.Context, input Input, createdBy uint64) (Item, error) {
+	filename := filepath.Base(strings.TrimSpace(input.Filename))
 	if filename == "." || filename == "" || utf8.RuneCountInString(filename) > 255 {
 		return Item{}, ErrUnsupportedType
 	}
-	file, err := header.Open()
-	if err != nil {
-		return Item{}, fmt.Errorf("open uploaded file: %w", err)
-	}
-	defer file.Close()
-	body, err := io.ReadAll(io.LimitReader(file, MaxSize+1))
-	if err != nil {
-		return Item{}, fmt.Errorf("read uploaded file: %w", err)
-	}
+	body := input.Body
 	if len(body) == 0 {
 		return Item{}, ErrUnsupportedType
 	}
@@ -113,12 +113,12 @@ func (s *Service) Create(ctx context.Context, header *multipart.FileHeader, crea
 	if !ok {
 		return Item{}, ErrUnsupportedType
 	}
-	declared := strings.ToLower(strings.TrimSpace(strings.Split(header.Header.Get("Content-Type"), ";")[0]))
+	declared := strings.ToLower(strings.TrimSpace(strings.Split(input.DeclaredContentType, ";")[0]))
 	if declared != "" && declared != "application/octet-stream" && declared != contentType && !(contentType == "image/jpeg" && declared == "image/jpg") {
 		return Item{}, ErrUnsupportedType
 	}
 	configuration, decodedFormat, err := image.DecodeConfig(bytes.NewReader(body))
-	if err != nil || decodedFormat != format || configuration.Width < 1 || configuration.Height < 1 || configuration.Width > 20000 || configuration.Height > 20000 {
+	if err != nil || decodedFormat != format || !validImageDimensions(configuration.Width, configuration.Height) {
 		return Item{}, ErrUnsupportedType
 	}
 
@@ -128,27 +128,64 @@ func (s *Service) Create(ctx context.Context, header *multipart.FileHeader, crea
 	}
 	now := s.now().UTC()
 	key := fmt.Sprintf("%04d/%02d/%s%s", now.Year(), now.Month(), hex.EncodeToString(randomName), extension)
-	if err := s.objects.Put(ctx, key, bytes.NewReader(body), int64(len(body)), contentType); err != nil {
-		return Item{}, err
-	}
 	checksum := sha256.Sum256(body)
 	publicURL := s.publicURL + "/" + key
 	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO uploads (storage_key, public_url, original_filename, content_type, size, width, height, sha256, status, created_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'uploading', ?)
 	`, key, publicURL, filename, contentType, len(body), configuration.Width, configuration.Height, checksum[:], createdBy)
 	if err != nil {
-		_ = s.objects.Delete(context.Background(), key)
 		return Item{}, fmt.Errorf("record upload: %w", err)
 	}
-	id, _ := result.LastInsertId()
+	id, err := result.LastInsertId()
+	if err != nil {
+		return Item{}, fmt.Errorf("read pending upload id: %w", err)
+	}
+	if err := s.objects.Put(ctx, key, bytes.NewReader(body), int64(len(body)), contentType); err != nil {
+		s.discardPendingUpload(id, key)
+		return Item{}, err
+	}
+	update, err := s.db.ExecContext(ctx, `UPDATE uploads SET status='active' WHERE id=? AND status='uploading'`, id)
+	if err == nil {
+		if affected, rowsErr := update.RowsAffected(); rowsErr != nil {
+			err = rowsErr
+		} else if affected != 1 {
+			err = errors.New("pending upload state changed unexpectedly")
+		}
+	}
+	if err != nil {
+		s.discardPendingUpload(id, key)
+		return Item{}, fmt.Errorf("activate upload: %w", err)
+	}
 	return Item{ID: id, URL: publicURL, Filename: filename, ContentType: contentType, Size: int64(len(body)), Width: configuration.Width,
 		Height: configuration.Height, Status: "active", UsageCount: 0, References: []Reference{}, CreatedAt: now, StorageKey: key}, nil
 }
 
+func (s *Service) discardPendingUpload(id int64, key string) {
+	cleanupContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.objects.Delete(cleanupContext, key); err != nil {
+		return
+	}
+	_, _ = s.db.ExecContext(cleanupContext, `DELETE FROM uploads WHERE id=? AND status='uploading'`, id)
+}
+
+func validImageDimensions(width, height int) bool {
+	if width < 1 || height < 1 || width > maxImageEdge || height > maxImageEdge {
+		return false
+	}
+	return int64(width)*int64(height) <= maxImagePixel
+}
+
 func (s *Service) List(ctx context.Context, query ListQuery) (Page, error) {
-	conditions := []string{"u.status = ?"}
-	args := []any{query.Status}
+	conditions := make([]string, 0, 3)
+	args := make([]any, 0, 3)
+	if query.Status == "trashed" {
+		conditions = append(conditions, "u.status IN ('trashed','deleting')")
+	} else {
+		conditions = append(conditions, "u.status = ?")
+		args = append(args, query.Status)
+	}
 	if query.Search != "" {
 		conditions = append(conditions, "u.original_filename LIKE ?")
 		args = append(args, "%"+escapeLike(query.Search)+"%")
@@ -274,7 +311,9 @@ func (s *Service) DeletePermanent(ctx context.Context, id int64) error {
 		return err
 	}
 	if err = s.objects.Delete(ctx, key); err != nil {
-		_, _ = s.db.ExecContext(context.Background(), `UPDATE uploads SET status='trashed' WHERE id=? AND status='deleting'`, id)
+		compensationContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = s.db.ExecContext(compensationContext, `UPDATE uploads SET status='trashed' WHERE id=? AND status='deleting'`, id)
 		return err
 	}
 	if _, err = s.db.ExecContext(ctx, `DELETE FROM uploads WHERE id=? AND status='deleting'`, id); err != nil {
@@ -300,12 +339,70 @@ func (s *Service) CleanupTrashed(ctx context.Context, olderThan time.Time, limit
 	if err := rows.Close(); err != nil {
 		return err
 	}
+	var cleanupErr error
 	for _, id := range ids {
 		if err := s.DeletePermanent(ctx, id); err != nil && !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrInvalidState) {
-			return err
+			// One broken MinIO object must not permanently starve every newer
+			// item behind it. Keep the failed row retryable and process the rest
+			// of the batch before reporting the aggregate failure.
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete expired upload %d: %w", id, err))
 		}
 	}
-	return nil
+	return cleanupErr
+}
+
+func (s *Service) CleanupPending(ctx context.Context, olderThan time.Time, limit int) error {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id,storage_key FROM uploads
+		WHERE status='uploading' AND created_at < ?
+		ORDER BY created_at ASC LIMIT ?
+	`, olderThan.UTC(), limit)
+	if err != nil {
+		return fmt.Errorf("list interrupted uploads: %w", err)
+	}
+	type pendingUpload struct {
+		id  int64
+		key string
+	}
+	items := make([]pendingUpload, 0)
+	for rows.Next() {
+		var item pendingUpload
+		if err := rows.Scan(&item.id, &item.key); err != nil {
+			rows.Close()
+			return err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	var cleanupErr error
+	for _, item := range items {
+		result, err := s.db.ExecContext(ctx, `
+			UPDATE uploads SET status='deleting',trashed_at=UTC_TIMESTAMP(6)
+			WHERE id=? AND status='uploading'
+		`, item.id)
+		if err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("claim interrupted upload %d: %w", item.id, err))
+			continue
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("inspect interrupted upload %d claim: %w", item.id, err))
+			continue
+		}
+		if affected == 0 {
+			continue
+		}
+		if err := s.objects.Delete(ctx, item.key); err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete interrupted upload %d object: %w", item.id, err))
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM uploads WHERE id=? AND status='deleting'`, item.id); err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete interrupted upload %d record: %w", item.id, err))
+		}
+	}
+	return cleanupErr
 }
 
 func scanItems(rows *sql.Rows) ([]Item, error) {

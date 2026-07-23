@@ -3,11 +3,10 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { useTheme } from '@/composables/useTheme'
 import { useAdminToast } from '@/composables/useAdminToast'
-import { useAuth } from '@/composables/useAuth'
+import { authLogoutStorageKey, useAuth } from '@/composables/useAuth'
 import type { AuthUser } from '@/types/blog'
 import AdminToastHost from './AdminToastHost.vue'
 
-const logoutStorageKey = 'myblog:admin-logout'
 const router = useRouter()
 const user = ref<AuthUser | null>(null)
 const menuOpen = ref(false)
@@ -40,7 +39,7 @@ function verifyWhenVisible() {
 }
 
 function handleLogoutFromAnotherTab(event: StorageEvent) {
-  if (event.key === logoutStorageKey) window.location.replace('/login?loggedOut=1')
+  if (event.key === authLogoutStorageKey) window.location.replace('/login?loggedOut=1')
 }
 
 onMounted(() => {
@@ -63,7 +62,6 @@ async function logout() {
   loggingOut.value = true
   try {
     await logoutSession()
-    localStorage.setItem(logoutStorageKey, String(Date.now()))
     window.location.replace('/login?loggedOut=1')
   } catch (cause) {
     toast.error(cause instanceof Error ? cause.message : '退出失败，请重试')
@@ -87,6 +85,7 @@ async function logout() {
         <RouterLink to="/admin/site">站点设置</RouterLink>
         <RouterLink to="/admin/users">用户管理</RouterLink>
         <RouterLink v-if="user?.isOwner" to="/admin/administrators">管理员权限</RouterLink>
+        <RouterLink v-if="user?.isOwner" to="/admin/audit">操作审计</RouterLink>
         <a href="/" target="_blank">查看博客 ↗</a>
       </nav>
       <div class="admin-account">

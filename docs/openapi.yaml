@@ -168,7 +168,7 @@ paths:
     post:
       tags: [Auth]
       summary: 为当前 GitHub 用户创建 Artalk 评论会话
-      description: 同步当前用户的评论管理权限；站点所有者和已授权管理员会成为 Artalk 管理员。
+      description: 使用持久化的 GitHub 数字 ID → Artalk 用户 ID 映射保持评论身份稳定；GitHub 主邮箱变化时迁移原 Artalk 身份，并同步当前用户的评论管理权限。
       security: [{ sessionCookie: [], csrfToken: [] }]
       responses:
         '200':
@@ -178,6 +178,7 @@ paths:
               schema: { $ref: '#/components/schemas/ArtalkSessionResponse' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /internal/artalk-oidc/userinfo:
     get:
       tags: [Auth]
@@ -228,9 +229,26 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/PostDetailResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /admin/posts/trash:
+    get:
+      tags: [Admin Posts]
+      summary: 获取文章回收站
+      description: 回收站文章保留原分类、标签和媒体引用，以便完整恢复。
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: 已删除文章的分页数据
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PostPageResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
   /admin/posts/{id}:
     parameters:
       - $ref: '#/components/parameters/PostId'
@@ -262,6 +280,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/PostDetailResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -272,6 +291,31 @@ paths:
       security: [{ sessionCookie: [], csrfToken: [] }]
       responses:
         '204': { description: 删除成功 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /admin/posts/{id}/restore:
+    post:
+      tags: [Admin Posts]
+      summary: 从回收站恢复文章及其关联
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      parameters:
+        - $ref: '#/components/parameters/PostId'
+      responses:
+        '204': { description: 文章已恢复 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /admin/posts/{id}/permanent:
+    delete:
+      tags: [Admin Posts]
+      summary: 永久删除回收站文章
+      description: 仅能删除已在回收站中的文章；同时释放其分类、标签和媒体引用。
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      parameters:
+        - $ref: '#/components/parameters/PostId'
+      responses:
+        '204': { description: 文章已永久删除 }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -428,6 +472,7 @@ paths:
         - name: status
           in: query
           schema: { type: string, enum: [active, trashed], default: active }
+          description: trashed 同时返回永久清理中断后待重试的 deleting 记录
         - name: usage
           in: query
           schema: { type: string, enum: [all, used, unused], default: all }
@@ -450,6 +495,7 @@ paths:
           multipart/form-data:
             schema:
               type: object
+              additionalProperties: false
               required: [file]
               properties:
                 file:
@@ -461,8 +507,9 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/UploadResponse' }
-        '413': { $ref: '#/components/responses/BadRequest' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
         '415': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
   /admin/uploads/{id}:
     get:
       tags: [Uploads]
@@ -530,6 +577,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/SiteProfileResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
   /admin/administrators:
     get:
       tags: [Admin Permissions]
@@ -586,6 +634,8 @@ paths:
       summary: 列出通过 GitHub 登录过的评论用户
       security: [{ sessionCookie: [] }]
       parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
         - name: q
           in: query
           schema: { type: string, maxLength: 100 }
@@ -622,6 +672,34 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /admin/audit-events:
+    get:
+      tags: [Admin Permissions]
+      summary: 查询管理员写操作审计事件（仅站点所有者）
+      description: 仅返回操作元数据，不保存请求正文、Cookie、Token 或密钥。事件默认保留 365 天。
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: outcome
+          in: query
+          schema:
+            type: string
+            enum: [all, success, failure]
+            default: all
+          description: success 为 HTTP 2xx/3xx，failure 为 HTTP 4xx/5xx
+        - name: q
+          in: query
+          schema: { type: string, maxLength: 100 }
+          description: 按管理员用户名、请求路径或请求 ID 搜索
+      responses:
+        '200':
+          description: 审计事件分页
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditEventPageResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 components:
   securitySchemes:
     sessionCookie:
@@ -636,7 +714,7 @@ components:
     Page:
       name: page
       in: query
-      schema: { type: integer, minimum: 1, default: 1 }
+      schema: { type: integer, minimum: 1, maximum: 1000, default: 1 }
     PageSize:
       name: pageSize
       in: query
@@ -662,6 +740,19 @@ components:
   responses:
     BadRequest:
       description: 请求参数或字段错误
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    PayloadTooLarge:
+      description: 请求体超过接口允许的大小
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    TooManyRequests:
+      description: 请求频率或并发超过当前限制
+      headers:
+        Retry-After:
+          schema: { type: integer, minimum: 1 }
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
@@ -925,9 +1016,13 @@ components:
         nickname: { type: string }
     Administrator:
       type: object
-      required: [githubId, isOwner, grantedAt]
+      required: [githubId, login, name, avatarUrl, hasSignedIn, isOwner, grantedAt]
       properties:
         githubId: { type: integer, format: int64, minimum: 1 }
+        login: { type: string }
+        name: { type: string }
+        avatarUrl: { type: string }
+        hasSignedIn: { type: boolean }
         isOwner: { type: boolean }
         grantedAt: { type: [string, 'null'], format: date-time }
     AdministratorResponse:
@@ -976,9 +1071,42 @@ components:
       type: object
       required: [data]
       properties:
-        data:
+        data: { $ref: '#/components/schemas/CommentUserPage' }
+    CommentUserPage:
+      type: object
+      required: [items, pagination]
+      properties:
+        items:
           type: array
           items: { $ref: '#/components/schemas/CommentUser' }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+    AuditEvent:
+      type: object
+      required: [id, actorGithubId, actorLogin, method, requestPath, responseStatus, requestId, clientIp, resourceLocation, occurredAt]
+      properties:
+        id: { type: integer, format: int64, minimum: 1 }
+        actorGithubId: { type: integer, format: int64, minimum: 1 }
+        actorLogin: { type: string, maxLength: 100 }
+        method: { type: string, enum: [POST, PUT, PATCH, DELETE] }
+        requestPath: { type: string, maxLength: 500 }
+        responseStatus: { type: integer, minimum: 100, maximum: 599 }
+        requestId: { type: string, maxLength: 64 }
+        clientIp: { type: string, maxLength: 45 }
+        resourceLocation: { type: string, maxLength: 500 }
+        occurredAt: { type: string, format: date-time }
+    AuditEventPage:
+      type: object
+      required: [items, pagination]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AuditEvent' }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+    AuditEventPageResponse:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: '#/components/schemas/AuditEventPage' }
     Upload:
       type: object
       required: [id, url, filename, contentType, size, width, height, status, usageCount, references, createdAt, trashedAt]
@@ -990,7 +1118,7 @@ components:
         size: { type: integer, format: int64, minimum: 1 }
         width: { type: integer, minimum: 1 }
         height: { type: integer, minimum: 1 }
-        status: { type: string, enum: [active, trashed] }
+        status: { type: string, enum: [active, trashed, deleting] }
         usageCount: { type: integer, minimum: 0 }
         references:
           type: array

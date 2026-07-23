@@ -1,5 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { api, sanitizeAdminReturnTo, sanitizeReturnTo } from '@/services/api'
+import { sanitizeAdminReturnTo, sanitizeReturnTo } from '@/services/api'
+import { useAuth } from '@/composables/useAuth'
+
+const { refreshAuth } = useAuth()
 
 const router = createRouter({
   history: createWebHistory(),
@@ -34,6 +37,7 @@ const router = createRouter({
     { path: '/admin/site', name: 'admin-site', meta: { layout: 'admin', requiresAuth: true }, component: () => import('@/pages/admin/AdminSiteSettingsPage.vue') },
     { path: '/admin/users', name: 'admin-users', meta: { layout: 'admin', requiresAuth: true }, component: () => import('@/pages/admin/AdminUsersPage.vue') },
     { path: '/admin/administrators', name: 'admin-administrators', meta: { layout: 'admin', requiresAuth: true, requiresOwner: true }, component: () => import('@/pages/admin/AdminAdministratorsPage.vue') },
+    { path: '/admin/audit', name: 'admin-audit', meta: { layout: 'admin', requiresAuth: true, requiresOwner: true }, component: () => import('@/pages/admin/AdminAuditPage.vue') },
     { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('@/pages/NotFoundPage.vue') },
   ],
 })
@@ -41,7 +45,7 @@ const router = createRouter({
 router.beforeEach(async (to) => {
   if (to.name === 'login') {
     try {
-      const auth = await api.getAuthState()
+      const auth = await refreshAuth()
       if (auth.authenticated) {
         const returnTo = sanitizeReturnTo(to.query.returnTo)
         return returnTo.startsWith('/admin') && !auth.user?.isAdmin ? '/' : returnTo
@@ -54,7 +58,7 @@ router.beforeEach(async (to) => {
 
   if (!to.meta.requiresAuth) return true
   try {
-    const auth = await api.getAuthState()
+    const auth = await refreshAuth()
     if (auth.authenticated && auth.user?.isAdmin) {
       if (to.meta.requiresOwner && !auth.user.isOwner) return { name: 'admin-dashboard' }
       return true

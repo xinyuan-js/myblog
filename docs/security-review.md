@@ -1,121 +1,146 @@
-# MyBlog 安全审查
+# MyBlog 上线前审查
 
-审查日期：2026-07-23  
+审查日期：2026-07-24
 范围：Vue SPA、Gin API、GitHub OAuth、MySQL、MinIO、Artalk、Nginx、Docker Compose、备份恢复和 Git 交付边界。
 
-## 结论状态
+## 当前结论
 
-应用发布门禁已关闭。业务代码、前端依赖、Go 可达漏洞、认证授权、上传边界、数据隔离、容器镜像、运行态权限矩阵和隔离恢复均已通过验证。最终五个运行镜像使用同一份有效期内的 Trivy 数据库逐个扫描，可修复的 HIGH/CRITICAL 均为 0；完整 Compose 栈已使用这些镜像重建并保持健康。
+代码、依赖、最终镜像以及隔离的全新部署/已有数据升级门禁已通过，但真实私有配置和生产发布门禁尚未关闭。
 
-这表示当前制品具备上线条件，不表示互联网基础设施自动安全。正式开放前仍需由运维完成真实域名证书、GitHub OAuth 生产回调、异地加密备份、主机防火墙与补丁、ICP 备案等外部事项。
+本轮修改拆分了 Artalk 桥接密码和 MinIO 根/应用凭据，当前私有 `.env` 尚未补充以下新值，正在运行的本地容器仍是修改前镜像，因此不能把旧容器的健康状态当作最终运行验收：
 
-## 威胁边界
+```text
+ARTALK_BRIDGE_DB_PASSWORD
+MINIO_ROOT_USER
+MINIO_ROOT_PASSWORD
+```
 
-- 公网入口只有 Nginx 的 80/443；API、MySQL、MinIO 和 Artalk 不发布宿主机端口。
-- 访客可读取公开文章、媒体和评论，并可通过 Artalk 发表评论。
-- 所有用户通过 GitHub OAuth 登录；配置中的不可变数字 GitHub ID 是站点所有者，可授权其他 GitHub 数字 ID 为管理员。
-- 管理写请求必须同时通过数据库会话、Origin 和 CSRF Token 校验。
-- 浏览器不持有 GitHub Client Secret、MinIO 凭据或管理员 Bearer Token。
-- 用户提交的 Markdown、评论内容、文件名、图片和上游 OAuth/API 响应均视为不可信输入。
-- 单机云盘故障、宿主机失陷和 Docker 管理权限失陷不在应用容器能够自行恢复的范围内，必须依赖异地加密备份和主机加固。
+使用非敏感测试凭据的隔离栈已证明三个一次性初始化服务、前 11 个迁移、API 就绪和桥接最小权限可在全新数据路径工作；此前的 9 个迁移版本还验证过已有数据升级路径。第 12 个稳定评论身份迁移另在真实 MySQL 8.4 的现有 `github_users` 表副本上通过，包含第 13/14 个维护索引的 1→14 全新 SQL 链也已通过。补齐私有配置后仍必须重建真实栈，再完成 14 个迁移的完整 Compose 部署、真实 GitHub 登录、邮箱变化、完整角色矩阵、评论写入/登出、备份与隔离恢复验收。正式公网开放还依赖真实域名证书、GitHub OAuth 回调、主机防火墙、异地加密备份、告警和备案。
 
-## 已验证控制
+## 本轮确认并修复的问题
 
-### 身份与会话
+### 高优先级
 
-- 不存在注册、密码登录或找回密码接口。
-- OAuth state 带 HMAC、过期时间、一次性数据库记录和 SameSite Cookie。
-- 会话随机值只保存在 HttpOnly Cookie，数据库只保存 SHA-256 哈希。
-- Cookie 使用 `HttpOnly`、生产环境 `Secure` 和 `SameSite=Lax`。
-- 每次管理员请求都从配置所有者和数据库授权名单重新计算权限；授权和撤销无需重新登录即可生效。
-- 只有配置中的站点所有者可调用管理员权限接口，且所有者不能通过接口删除。
-- 所有管理写接口和退出登录均验证 Origin 与 CSRF。
-- OAuth 返回路径只允许站内相对路径；普通用户请求管理路径时会返回首页，防止开放重定向和越权跳转。
-- 登出只删除本站数据库会话和本站 Cookie，不操作 GitHub 登录；失败的 Origin/CSRF 校验不会提前清除 Cookie。
-- 评论 SSO Token 带用途、HMAC 和五分钟有效期；Artalk 管理员身份由当前博客权限同步，撤销博客管理员时同步撤销评论审核权限。
+1. **Artalk 数据库最小权限可被绕过。** `artalk_user` 和 `blog_artalk_bridge` 原来共用密码，API 容器一旦失陷即可改用全权限账号。现在使用独立 `ARTALK_BRIDGE_DB_PASSWORD`，启动检查禁止四个 MySQL 密码复用。
+2. **API 持有 MinIO 根账号。** 现在根凭据只进入无网络配置检查和一次性初始化容器；API 使用独立用户，只能定位 `blog-media`、写入和删除其中对象，不能访问其他 Bucket 或管理 API。
+3. **Docker 构建缓存可能收录真实 `.env`。** API 的旧 `.dockerignore` 未排除环境文件，`COPY . .` 可能把密钥写入历史构建缓存。根、API、Web 构建上下文现已统一排除 `.env*`、缓存、备份、依赖和构建产物。
+4. **本站登出不能约束已有 Artalk Token。** 旧网关只检查“创建评论”，登出后另一个标签页仍可能凭 Artalk Token 发起编辑、删除、投票或审核请求。现在所有 Artalk `POST`、`PUT`、`DELETE` 都必须同时持有有效本站会话并通过 Origin 检查。
+5. **管理员角色可能漂移或被并发写回。** 管理员增删和 Artalk 会话同步现由同一角色锁串行化，会话交换前重新读取当前授权；API 启动时清除 Artalk 陈旧管理员并按本站所有者/授权名单重新对账。
+6. **Artalk Token 未绑定当前本站用户。** 原网关只确认“存在一个本站会话”，没有证明转发的 Artalk Token 属于同一账号。现在带 Token 的读取和全部写入会先通过 Artalk 当前用户接口核对已验证邮箱；退出本站、Token 失效或账号不一致都会在网关被拒绝。
+7. **GitHub 主邮箱变化会拆分评论身份。** 锁定的 Artalk SSO 版本忽略 OIDC `sub`，按邮箱查找用户；同一 GitHub 数字 ID 更换主邮箱后会创建第二个 Artalk 用户并失去旧评论归属。现在首次交换后持久化 GitHub ID → Artalk 用户 ID，后续邮箱变化更新已绑定用户；邮箱冲突会明确拒绝，且 GitHub 用户名/邮箱不再是本站唯一键。
 
-### 输入、内容与上传
+### 逻辑、管理和部署
 
-- Markdown 禁止原生 HTML，并经过 DOMPurify 清洗。
-- 社交链接在前端统一过滤，只允许绝对 HTTP/HTTPS URL，拒绝 `javascript:`、`data:` 和相对路径。
-- 上传请求和 JSON 请求均有限制体积。
-- 图片同时校验扩展名、声明 MIME、文件头、可解码格式、尺寸和 10MiB 上限。
-- 对象键由加密随机值生成，不使用原始文件名作为路径。
-- 正在被头像、Banner、封面或正文引用的媒体不能删除；未引用媒体先进入回收站。
-- MinIO 管理端点和 Console 不对公网开放；`/uploads/` 仅允许公开读取 Bucket 对象。
+- 评论代理由 `Any` 改为显式 `GET/HEAD/POST/PUT/DELETE/OPTIONS`，CONNECT、PATCH、TRACE 返回 405。
+- 登出请求失败时前端不再伪装成已退出；成功登出会跨标签页清理本站和 Artalk 前端状态。
+- 评论用户管理增加分页、总数和 100 字搜索上限，不再静默截断为最近 200 人。
+- 文章管理页改为真实分页和总数，不再让第 101 篇之后的文章从界面消失。
+- 归档、标签和分类文章页改用 URL 驱动的真实分页，不再分别静默截断于前 100/50 篇，也避免一次性全量读取。
+- 文章删除改为真正的回收站：分类、标签和媒体引用保持受保护，可完整恢复；只有二次确认的永久删除才释放关联。
+- 管理员列表显示已登录用户的 GitHub 头像、用户名和昵称；尚未登录的预授权 ID 会明确标为待核对，降低输错数字 ID 的风险。
+- GitHub 用户资料和本站会话改为同一数据库事务写入，创建会话失败时不会留下误导性的“已登录用户”记录。
+- 鉴权读取统一使用 `github_users` 中的最新身份资料，避免同一用户的旧会话把 Artalk 邮箱改回旧值；`last_seen_at` 最多每 5 分钟刷新一次，避免评论区轮询把每个鉴权读取变成 MySQL 写入。
+- OAuth 发起阶段的 state 持久化使用请求 Context，客户端取消后不再留下脱离请求生命周期继续阻塞的数据库操作。
+- 媒体维护不再因一个最旧对象删除失败而永久饿死后续回收项；中断上传和回收站均逐项继续、最后汇总错误，补偿更新有 5 秒上限。评论额度与媒体回收查询增加按清理条件排列的索引。
+- GitHub 登录发起与 Artalk 会话不再共用同一 IP 限流桶；OAuth 回调依靠限流入口签发的 HMAC、短期、一次性 state，不再被无关评论流量抢占额度。
+- 生产启动预检会在依赖服务启动前验证 `APP_ORIGIN`、`NGINX_SERVER_NAME` 和 Secure Cookie 一致，避免部署后才暴露 OAuth 域名错配。
+- 前端认证状态增加跨标签页版本控制，登出完成前已经发出的 `/auth/me` 响应不能再把界面写回“已登录”。
+- 公开文章、后台文章和媒体页码上限从一百万降为 1000，避免恶意超大 OFFSET 拖慢 MySQL。
+- 上传图片除 10 MiB 文件限制外增加 4000 万总像素和 12000 单边像素限制，避免高压缩比超大图片造成访客浏览器内存耗尽。
+- 上传不再由默认 multipart 解析和业务读取各保存一份文件；请求严格限制为单个 `file` Part，并以两个全局并发槽约束最坏内存占用，槽满返回 429。
+- MinIO 客户端禁止环境代理并限制连接数、连接/TLS/响应及单次操作时间；10 MiB 上传显式关闭 multipart，避免 SDK 阈值变化或进程中断留下媒体数据库无法发现的分片。
+- Nginx 不再全站放行 11 MiB 请求体：上传、文章、站点设置、评论和普通 API 分别限制；Go 对超限 JSON 返回明确的 413，同时为 1/2 MiB Markdown 字段保留 JSON 包装空间。
+- 博客与 Artalk MySQL DSN 增加并强制生产连接/读/写超时，Nginx 上游连接和传输也有明确边界；API 容器的 20 秒停止宽限期大于应用 10 秒优雅停机上限，并等待后台维护任务确认退出。
+- API 就绪检查增加 Artalk 数据库与 HTTP；Compose 等待 Artalk、MinIO 权限初始化完成后再启动 API。
+- Docker 后端网段改为 `BACKEND_SUBNET` 可配置值，避免与宿主机现有 Docker/VPN 网络冲突。
+- MinIO 匿名策略只允许读取已知对象 URL，不允许列举 Bucket；回收站界面明确说明永久删除前旧 URL 仍有效。
+- 媒体永久删除中断产生的 `deleting` 状态不再从管理端消失；回收站会明确显示并允许重试清理，同时禁止把可能已不存在的对象错误恢复。
+- 上传流程增加持久化 `uploading` 状态，MinIO 写入前先留下可追踪元数据；跨存储中断会在一小时后原子转为清理状态并删除对象，避免无法从管理端发现的孤儿文件。
+- 增加凭据强度/复用预检，错误凭据会在 MySQL 首次初始化前失败，避免留下半初始化数据目录。
+- API 的生产配置自身也会解析并校验两个 MySQL DSN、32 字符密码、TCP、UTC、`parseTime` 和迁移所需的 `multiStatements`，不再只依赖 Compose 预检。
+- 新数据库中 Artalk 的 `users` 表晚于 MySQL 初始化脚本创建，表级桥接授权不能在 `/docker-entrypoint-initdb.d` 阶段完成；现在由等待 Artalk 健康的 `artalk-bridge-init` 通过私有共享 Unix Socket 自动创建/轮换账号并授权，API 必须等待其成功退出。
+- 迁移执行前写入持久化 attempt marker；MySQL DDL 中断后 API 会拒绝盲目重跑并指出具体迁移，避免把部分提交进一步扩大。
+- 证书更新后可运行 `deploy/reload-web-certificate.sh` 重建 Web 容器；README 给出 Certbot deploy hook。
+- 备份校验文件改用相对文件名，可移动到其他目录校验；归档现在包含完整非敏感部署目录、Dockerfile 和 Git 提交号。
+- 备份增加内核互斥与写入静默窗口，异常退出也会尝试恢复原本运行的 API/Artalk；媒体导出改用最小权限应用账号，避免把 MinIO 根权限带入备份容器。归档记录实际容器镜像引用/ID并在发布前自校验，独立校验器拒绝路径穿越、链接和缺失/空数据库导出。
+- 管理员写请求现在持久化记录操作者、路径、HTTP 结果、来源 IP 和请求 ID；只允许站点所有者查询，不保存正文或认证材料，并按 365 天保留期清理。
+- API/Web/MySQL/MinIO 镜像地址可由环境变量覆盖为 Registry 的不可变摘要，2GB 服务器无需现场编译 MinIO。
+- 模拟 Banner 从 2.1 MiB PNG 转为约 184 KiB WebP；生产 JavaScript 不引用模拟数据。
+- README、需求文档、后端契约和 OpenAPI 已同步评论登录、用户策略、备案、分页和代理边界。
+- 新增无生产密钥的 GitHub Actions 门禁：官方 Actions 固定到提交 SHA，隔离 MySQL 8.4 真实执行迁移/集成测试，随后运行 race、类型检查、前后端测试、依赖审计、脚本/Compose 校验和应用镜像构建；仓库边界脚本拒绝把私有环境、密钥和运行产物加入 Git 索引。
+- 四个 Dockerfile 的 BuildKit 前端也固定到已验证摘要，不再由可变的 `docker/dockerfile:1.7` 标签决定构建语义。
 
-### 数据、网络与运行时
+## 当前安全边界
 
-- `blog` 和 `artalk` 使用不同数据库及账号，MySQL 不发布 3306。
-- API 访问 Artalk 仅使用 `blog_artalk_bridge`，其权限限定为 `SELECT, UPDATE ON artalk.users`。
-- API、Artalk 和 MinIO 使用只读根文件系统、`no-new-privileges`、能力集删除、PID/内存限制和 tmpfs。
-- Nginx 配置 CSP、HSTS（HTTPS）、frame、MIME、Referrer 和 Permissions Policy。
-- API 配置读取、写入和空闲超时；固定窗口限流器的客户端状态上限为 4096。
-- Nginx 对全部 API 和 Artalk 评论入口按客户端 IP 限流；登录和上传另有 Gin 应用层限流。
-- 容器日志限制为 10MiB × 3，避免磁盘无限增长。
-- Nginx 访问日志只记录 URI，不记录查询参数或 Referrer；实测 OAuth/JWT 查询标记未进入日志。
-- 生产配置拒绝 HTTP Origin、非 Secure Cookie、默认 MinIO 凭据、弱 OAuth state 密钥和错误 OAuth 回调来源。
+- 公网入口只能是 Nginx 80/443；API、MySQL、MinIO、Artalk 和 Docker API不得发布宿主机端口。
+- 访客可读取公开文章、媒体和审核后评论；任何评论写操作必须先用 GitHub 登录本站。
+- 配置中的不可变 GitHub 数字 ID 是站点所有者；只有所有者能授权其他管理员。
+- 管理写请求必须同时通过数据库会话、当前权限、Origin 和 CSRF Token 校验。
+- 会话随机值只存在 HttpOnly Cookie，数据库仅保存 SHA-256 哈希；生产 Cookie 使用 Secure 和 SameSite=Lax。
+- OAuth state 带 HMAC、十分钟过期和一次性数据库消费；回调路径只接受站内相对地址。
+- Markdown 禁止原生 HTML并经 DOMPurify 清洗；社交链接、JSON 和图片上传均有结构与体积校验。
+- MinIO 对象键使用加密随机值；被站点资料、文章封面或 Markdown 引用的媒体不能进入回收站。
+- 评论 SSO Token 带独立用途前缀和五分钟有效期；评论账号封禁和每日额度由 Gin 网关强制执行。
+- 已通过管理员会话的写操作会留下持久化元数据审计事件；审计查询仅站点所有者可用。
+- Nginx 不记录查询字符串或 Referrer，避免 OAuth code/state 和评论 Token 进入访问日志。
 
-### 备份与交付
+## 本轮已执行验证
 
-- 备份包含两个 SQL 数据库、`blog-media` Bucket 和非敏感部署模板。
-- 生产 `.env` 不进入备份压缩包；备份以 `0600` 创建并生成 SHA-256 校验文件。
-- 已完成空 Bucket、非空 Bucket 和隔离恢复演练；异地备份仍属于生产运维责任。
-- Git HEAD 不包含 `.env`、缓存、`node_modules`、`dist`、数据库、MinIO 数据或二进制编译产物。
-
-## 已执行验证
-
-| 检查 | 结果 |
+| 检查 | 当前结果 |
 | --- | --- |
 | `go test -count=1 ./...` | 通过 |
 | `go vet ./...` | 通过 |
-| `govulncheck ./...` | 0 个可达漏洞（2026-07-23，包含 Goldmark） |
-| Vue 严格类型检查 | 通过 |
-| Vitest | 19 项通过 |
-| Vite 生产构建 | 通过 |
-| `npm audit --omit=dev --audit-level=high` | 0 个漏洞（2026-07-23） |
-| OpenAPI 与 Gin 路由一致性测试 | 通过 |
-| HTTP/HTTPS Compose 解析 | 通过 |
-| HTTP Nginx 语法检查 | 通过 |
-| Shell 脚本语法检查 | 通过 |
-| 桌面端和 390px 移动端浏览器验收 | 通过，无控制台错误或横向溢出 |
-| 最终运行栈 MySQL/MinIO/API/Artalk/Web 健康检查 | 通过 |
-| 管理端文章、分类、标签、媒体、引用保护端到端测试 | 通过 |
-| 权限矩阵（未登录/普通用户/管理员/所有者） | 401/403/200 边界符合预期 |
-| 动态管理员授权与撤销 | `403 → 201 → 200 → 204 → 403`，无需重新登录 |
-| CSRF/Origin/登出运行态测试 | 缺失或错误来源 403；正确 CSRF 到达处理器；登出后会话 401 |
-| 内部 Artalk userinfo 公网暴露检查 | Nginx 仅返回 SPA HTML，不代理内部接口 |
-| 敏感查询参数日志检查 | 标记出现次数 0 |
-| 真实备份与隔离恢复 | SHA-256 通过；文章 10、媒体 3、评论 1、评论用户 2 均一致 |
+| `govulncheck ./...` | 0 个可达漏洞；另有不可达依赖公告 |
+| Vitest | 20 项通过 |
+| Vue 严格类型检查与 Vite 生产构建 | 通过 |
+| `npm audit --omit=dev --audit-level=high` | 0 个漏洞 |
+| `npm audit --audit-level=high` | 0 个漏洞（含构建依赖） |
+| GitHub Actions / actionlint | 四 Job 工作流语义校验通过；官方 Actions 固定提交 SHA，本地逐项复现命令通过 |
+| 仓库边界门禁 | 当前索引通过；临时 Git 仓库中的 `.env` 和运行数据库负例被拒绝 |
+| CI MySQL 集成 | 使用工作流同一 MySQL 8.4 镜像摘要，真实执行 `go test -count=1 ./...` 与 1→14 迁移通过 |
+| OpenAPI 与 Gin 注册路由一致性 | 通过 |
+| HTTP/HTTPS Compose 解析 | 通过（使用非敏感测试覆盖值） |
+| HTTP/HTTPS Nginx 语法 | 通过 |
+| Shell 脚本语法与 `git diff --check` | 通过 |
+| API/Web/MySQL/MinIO 最终镜像构建 | 通过 |
+| Trivy 最终五镜像门禁 | 可修复 HIGH/CRITICAL 均为 0 |
+| MinIO 隔离权限测试 | 指定 Bucket 写入成功；跨 Bucket、管理 API、匿名列举均被拒绝 |
+| 隔离全新部署与已有数据升级 | Compose 全新部署通过前 11/11 个迁移且无 attempt marker，长期服务全部健康；已有数据升级通过此前 9/9 个迁移，第 10/11 个迁移另通过真实 MySQL 集成升级测试；第 12 个迁移在真实 MySQL 8.4 表副本上通过，全新 1→14 SQL 链及第 13/14 个索引通过，完整 14 迁移 Compose 隔离栈仍待私有配置补齐后复验 |
+| Artalk 桥接运行权限 | 仅 `SELECT, UPDATE ON artalk.users`；跨表读取被拒绝，初始化重复执行成功 |
+| 管理审计运行态 | `admin_audit_events` 已由迁移创建，博客应用账号可写入并读回测试事件；HTTP 中间件和查询由单元测试覆盖 |
+| 备份控制流 | 假 Docker 端到端验证成功与媒体导出失败两条路径：写服务均按顺序恢复、健康检查执行、锁和临时文件清理；新增格式清单、实际镜像清单、SHA-256 与安全归档结构自校验通过，未向备份容器传递 MinIO 根凭据 |
+| 评论代理匿名边界 | 未登录写入 401、残留 Token 私有读取 401、匿名公开读取 200 |
+| 最终完整运行栈 | **待补齐私有 `.env` 后重建验证** |
+| 修改后备份与隔离恢复 | **待最终运行栈完成后重演** |
 
-## 镜像审计记录
+Trivy 使用的本地数据库 `UpdatedAt=2026-07-22T19:04:49Z`，扫描时仍在 `NextUpdate=2026-07-23T19:04:49Z` 有效窗口内。扫描对象：
 
-初扫使用 2026-07-22 更新的 Trivy 数据库，并只统计有修复版本的 HIGH/CRITICAL：
+- `myblog-api:latest`
+- `myblog-web:latest`
+- `myblog-minio:RELEASE.2025-10-15T17-29-55Z`
+- `myblog-mysql:8.4.10-hardened`
+- Compose 固定摘要的 `artalk/artalk-go:nightly`
 
-| 镜像 | 初扫发现 | 处理 |
-| --- | ---: | --- |
-| `myblog-api` | 12 HIGH | `x/crypto`、`x/net`、`x/sys` 升级到修复版本 |
-| `myblog-web`（旧 Nginx 1.28） | 32 HIGH、2 CRITICAL | 基础镜像升级到 Nginx 1.31.3 Alpine |
-| MySQL 8.4.5 | 多个 OS/Python/gosu 高危及严重项 | 基于固定 MySQL 8.4.10 摘要构建；移除未使用的 513MiB MySQL Shell/Python 环境，以 Go 1.26.5 重建固定 gosu 1.19 |
-| MinIO 2025-04-22 | 多个 OS、Go 标准库和依赖高危及严重项 | 固定 2025-10-15 MinIO/MC 源码提交、Go 1.26.5 和 Alpine 3.24.1，并固定升级存在公告的 Go 模块 |
-| Artalk 2.9.1 稳定镜像 | 55 HIGH、6 CRITICAL | 固定官方 nightly 提交 `75a35cc` 的镜像摘要；该替代镜像复扫为 0 |
+## 尚未消除的风险和管理缺口
 
-最终复扫使用 Trivy DB `UpdatedAt=2026-07-22T19:04:49Z`（扫描时仍在 `NextUpdate` 有效窗口内），且设置 `--ignore-unfixed --severity HIGH,CRITICAL --exit-code 1`：
+1. **旧 Docker 构建缓存可能含历史 `.env`。** 最终镜像不包含 `.env`，但旧 BuildKit 缓存不能据此证明安全。生产前应轮换所有现有密钥；不要导出或共享旧构建缓存。清理全局 Docker 缓存可能影响其他项目，未自动执行。
+2. **Git 历史仍公开提交作者姓名和邮箱。** 当前提交内容未发现真实运行密钥或个人路径，但 `git log` 含个人作者元数据。重写已推送历史是破坏性操作，必须由仓库所有者另行确认。
+3. **Go module 仍使用 `github.com/example/...`。** 它适合作为匿名模板，但与实际远端仓库地址不一致，不利于作为可导入 Go module 发布；改成实际地址会重新公开仓库账号标识，需要项目所有者选择。
+4. **审计写入不是业务事务的一部分，也不是不可篡改账本。** 管理操作已有持久化元数据事件，但数据库故障时可能出现业务成功而审计写入失败；拥有数据库高权限的人也能修改记录。当前适合个人站点的问题追踪，不满足强合规审计。
+5. **数据库迁移仍不是事务原子的。** MySQL DDL 会隐式提交；现在中断会留下 attempt marker 并阻止自动重跑，但仍可能需要从备份恢复或人工确认 schema，正式升级必须先备份并在副本演练。
+6. **管理员仍允许预授权尚未登录的数字 ID。** 管理界面现在会把这类记录标为“尚未登录，请核对 ID”，已登录用户会显示头像和用户名；但在对方首次登录前仍不能由本站独立证明该 ID 的实际归属。
+7. **单机锁不支持 API 横向扩容。** 管理员/Artalk 并发对账依赖单 API 进程；当前 Compose 是单实例设计，未来多副本必须改为数据库锁或队列。
+8. **Compose 环境变量对 Docker 管理员可见。** 容器已按最小权限拆分，但拥有宿主机 root 或 Docker Socket 的人员仍能读取所有服务环境；这属于必须通过主机权限和人员边界控制的风险。
+9. **构建并非逐字节完全可复现。** 基础镜像和上游源码提交已固定，但 Alpine 包安装/升级仍读取当前仓库状态；每次重建都必须重新扫描最终摘要。
+10. **异地加密备份、告警和证书签发仍是外部运维。** 当前脚本生成本机明文备份，必须在离机前加密；尚无磁盘、备份失败、容器健康和证书到期告警。
+11. **GitHub 是唯一登录依赖。** 中国大陆网络波动时管理员和评论用户可能无法新登录；项目尚无受严格保护的紧急恢复登录方式。
 
-| 最终镜像 | 可修复 HIGH/CRITICAL |
-| --- | ---: |
-| `myblog-api:latest` | 0 |
-| `myblog-web:latest` | 0 |
-| `myblog-minio:RELEASE.2025-10-15T17-29-55Z` | 0 |
-| `myblog-mysql:8.4.10-hardened` | 0 |
-| `artalk/artalk-go:nightly` 固定摘要 | 0 |
+## 关闭发布门禁所需证据
 
-## 上线运维清单
-
-以下项目依赖真实服务器或第三方账号，不属于本地应用制品：
-
-1. 用真实域名、GitHub OAuth App 和正式证书执行一次 HTTPS 验收，检查 HSTS、Secure Cookie 和 OAuth 回调。
-2. 只开放 80/443，并启用主机自动安全更新、SSH 密钥登录和云厂商防火墙。
-3. 将 SQL 和媒体备份用 `age`、GPG 或等效方案加密后复制到服务器之外，并定期从异地副本恢复。
-4. 为日志、磁盘、证书到期、备份失败和容器健康配置告警。
-5. 中国大陆服务器正式开放前完成 ICP 备案，并确认评论审核与通知邮箱可用。
+1. 在私有 `.env` 添加三个新凭据，且不在聊天、Git 或日志中公开。
+2. 用最终镜像重建完整栈，并确认 `config-check`、`minio-init`、`artalk-bridge-init` 均以 0 退出。
+3. 重新验证未登录/普通用户/管理员/所有者权限矩阵、跨标签页登出、封禁、每日额度、评论审核和管理员撤权。
+4. 运行一次新 `deploy/backup.sh`，从生成的异地加密副本完成隔离恢复。
+5. 在真实服务器核对仅 80/443 暴露、SSH 密钥登录、云防火墙、磁盘挂载、自动更新和告警。
+6. 备案完成后用真实域名、证书和 GitHub OAuth 回调完成 HTTPS 验收。
+7. 提交并推送当前工作树，在 GitHub 上确认新 CI 四个 Job 首次通过，并把它设为 `main` 分支保护的必需检查。

@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { api } from '@/services/api'
-import type { MediaItem, UploadStatus } from '@/types/blog'
+import type { MediaItem, UploadFilterStatus } from '@/types/blog'
 import { useDocumentMeta } from '@/composables/useDocumentMeta'
 import { useAdminToast } from '@/composables/useAdminToast'
 
 const items = ref<MediaItem[]>([])
-const status = ref<UploadStatus>('active')
+const status = ref<UploadFilterStatus>('active')
 const usage = ref<'all' | 'used' | 'unused'>('all')
 const search = ref('')
 const page = ref(1)
@@ -58,18 +58,25 @@ async function copyURL(item: MediaItem) {
 }
 
 async function trash(item: MediaItem) {
-  if (item.usageCount > 0 || !window.confirm(`将“${item.filename}”移入回收站吗？`)) return
+  if (item.usageCount > 0 || !window.confirm(
+    `将“${item.filename}”移入回收站吗？图片在永久删除前仍可通过已有公开 URL 访问。`,
+  )) return
   try { await api.trashUpload(item.id); selected.value = null; await load(); toast.success('图片已移入回收站') }
   catch (cause) { toast.error(cause instanceof Error ? cause.message : '移入回收站失败') }
 }
 
 async function restore(item: MediaItem) {
+  if (item.status === 'deleting') {
+    toast.error('该图片的永久清理尚未完成，只能重试永久删除')
+    return
+  }
   try { await api.restoreUpload(item.id); selected.value = null; await load(); toast.success('图片已恢复') }
   catch (cause) { toast.error(cause instanceof Error ? cause.message : '恢复失败') }
 }
 
 async function removePermanent(item: MediaItem) {
-  if (!window.confirm(`永久删除“${item.filename}”及其 MinIO 对象？此操作不可恢复。`)) return
+  const action = item.status === 'deleting' ? '重试清理' : '永久删除'
+  if (!window.confirm(`${action}“${item.filename}”及其 MinIO 对象？此操作不可恢复。`)) return
   try { await api.deleteUploadPermanent(item.id); selected.value = null; await load(); toast.success('图片已永久删除') }
   catch (cause) { toast.error(cause instanceof Error ? cause.message : '永久删除失败') }
 }
@@ -80,7 +87,11 @@ onMounted(() => load())
 
 <template>
   <header class="admin-page-header">
-    <div><h1>{{ title }}</h1><p>MinIO 中共有 {{ total }} 个{{ status === 'active' ? '可用' : '待清理' }}媒体文件。</p></div>
+    <div>
+      <h1>{{ title }}</h1>
+      <p v-if="status === 'active'">MinIO 中共有 {{ total }} 个可用媒体文件。</p>
+      <p v-else>共有 {{ total }} 个待清理文件；永久删除前，已有公开 URL 仍然有效。</p>
+    </div>
     <label class="button primary upload-button"><input class="sr-only" type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif" :disabled="uploading" @change="uploadFiles" />{{ uploading ? '上传中…' : '上传图片' }}</label>
   </header>
   <section class="card admin-panel media-toolbar">
@@ -94,7 +105,7 @@ onMounted(() => load())
   <section v-else class="media-grid" aria-label="媒体文件">
     <article v-for="item in items" :key="item.id" class="card media-card" @click="selected = item">
       <img :src="item.url" :alt="item.filename" loading="lazy" />
-      <div><strong :title="item.filename">{{ item.filename }}</strong><small>{{ item.width }}×{{ item.height }} · {{ (item.size / 1024).toFixed(1) }} KiB</small><span :class="{ used: item.usageCount > 0 }">{{ item.usageCount ? `${item.usageCount} 处使用` : '未使用' }}</span></div>
+      <div><strong :title="item.filename">{{ item.filename }}</strong><small>{{ item.width }}×{{ item.height }} · {{ (item.size / 1024).toFixed(1) }} KiB</small><span :class="{ used: item.usageCount > 0, retry: item.status === 'deleting' }">{{ item.status === 'deleting' ? '清理未完成，待重试' : item.usageCount ? `${item.usageCount} 处使用` : '未使用' }}</span></div>
     </article>
   </section>
   <nav v-if="totalPages > 1" class="media-pagination" aria-label="媒体分页"><button class="button" type="button" :disabled="page <= 1" @click="movePage(-1)">上一页</button><span>{{ page }} / {{ totalPages }}</span><button class="button" type="button" :disabled="page >= totalPages" @click="movePage(1)">下一页</button></nav>
@@ -105,7 +116,8 @@ onMounted(() => load())
       <img :src="selected.url" :alt="selected.filename" />
       <div class="media-detail"><h2 id="media-detail-title">{{ selected.filename }}</h2><p>{{ selected.contentType }} · {{ selected.width }}×{{ selected.height }} · {{ (selected.size / 1024).toFixed(1) }} KiB</p><code>{{ selected.url }}</code>
         <h3>引用位置</h3><ul v-if="selected.references.length"><li v-for="reference in selected.references" :key="`${reference.resourceType}-${reference.resourceId}-${reference.field}`">{{ reference.label }} · {{ reference.field }}</li></ul><p v-else>当前未被任何内容引用。</p>
-        <div class="admin-actions"><button class="button" type="button" @click="copyURL(selected)">{{ copied === selected.id ? '已复制' : '复制 URL' }}</button><button v-if="selected.status === 'active'" class="button danger" type="button" :disabled="selected.usageCount > 0" @click="trash(selected)">移入回收站</button><template v-else><button class="button" type="button" @click="restore(selected)">恢复</button><button class="button danger" type="button" @click="removePermanent(selected)">永久删除</button></template></div>
+        <p v-if="selected.status === 'deleting'" class="cleanup-warning">上次永久删除未完整结束。对象可能已经删除，不能恢复；请重试清理数据库记录。</p>
+        <div class="admin-actions"><button class="button" type="button" @click="copyURL(selected)">{{ copied === selected.id ? '已复制' : '复制 URL' }}</button><button v-if="selected.status === 'active'" class="button danger" type="button" :disabled="selected.usageCount > 0" @click="trash(selected)">移入回收站</button><template v-else-if="selected.status === 'trashed'"><button class="button" type="button" @click="restore(selected)">恢复</button><button class="button danger" type="button" @click="removePermanent(selected)">永久删除</button></template><button v-else class="button danger" type="button" @click="removePermanent(selected)">重试永久清理</button></div>
       </div>
     </section>
   </div>
@@ -125,6 +137,8 @@ onMounted(() => load())
 .media-card small { color: var(--text-faint); }
 .media-card span { justify-self: start; padding: .15rem .45rem; border-radius: 99px; color: var(--text-muted); background: var(--button-bg); font-size: .7rem; }
 .media-card span.used { color: oklch(.5 .13 150); }
+.media-card span.retry,
+.cleanup-warning { color: oklch(.58 .18 25); }
 .media-empty { padding: 4rem 1rem; color: var(--text-muted); text-align: center; }
 .media-pagination { display: flex; align-items: center; justify-content: center; gap: 1rem; margin-top: 1.5rem; color: var(--text-muted); }
 .media-dialog-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; padding: 2rem; place-items: center; background: rgb(0 0 0 / .55); }

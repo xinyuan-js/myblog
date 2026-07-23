@@ -7,8 +7,37 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
+  config-check:
+    image: ${API_IMAGE:-myblog-api:latest}
+    build:
+      context: ./apps/api
+    entrypoint: ["/bin/sh", "/bootstrap/check-secrets.sh"]
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      APP_ORIGIN: ${APP_ORIGIN:?set APP_ORIGIN}
+      NGINX_SERVER_NAME: ${NGINX_SERVER_NAME:-localhost}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD}
+      BLOG_DB_PASSWORD: ${BLOG_DB_PASSWORD:?set BLOG_DB_PASSWORD}
+      ARTALK_DB_PASSWORD: ${ARTALK_DB_PASSWORD:?set ARTALK_DB_PASSWORD}
+      ARTALK_BRIDGE_DB_PASSWORD: ${ARTALK_BRIDGE_DB_PASSWORD:?set ARTALK_BRIDGE_DB_PASSWORD}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY}
+      ARTALK_APP_KEY: ${ARTALK_APP_KEY:?set ARTALK_APP_KEY}
+    volumes:
+      - ./deploy/check-secrets.sh:/bootstrap/check-secrets.sh:ro
+    network_mode: none
+    mem_limit: 32m
+    pids_limit: 20
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging: *default-logging
+
   mysql:
-    image: myblog-mysql:8.4.10-hardened
+    image: ${MYSQL_IMAGE:-myblog-mysql:8.4.10-hardened}
     build:
       context: ./deploy/mysql
       args:
@@ -23,9 +52,12 @@ services:
       ARTALK_DB_PASSWORD: ${ARTALK_DB_PASSWORD:?set ARTALK_DB_PASSWORD}
     volumes:
       - ${DATA_DIR:-./data}/mysql:/var/lib/mysql
+      - mysql-socket:/var/run/mysqld
       - ./deploy/mysql/init-artalk.sh:/docker-entrypoint-initdb.d/10-artalk.sh:ro
+    depends_on:
+      config-check: { condition: service_completed_successfully }
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot \"-p$$MYSQL_ROOT_PASSWORD\" --silent"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -36,7 +68,7 @@ services:
     logging: *default-logging
 
   minio:
-    image: myblog-minio:RELEASE.2025-10-15T17-29-55Z
+    image: ${MINIO_IMAGE:-myblog-minio:RELEASE.2025-10-15T17-29-55Z}
     build:
       context: ./deploy/minio
       args:
@@ -49,11 +81,13 @@ services:
     restart: unless-stopped
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       MC_CONFIG_DIR: /tmp/mc
     volumes:
       - ${DATA_DIR:-./data}/minio:/data
+    depends_on:
+      config-check: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/minio/health/live"]
       interval: 10s
@@ -68,15 +102,49 @@ services:
     security_opt: [no-new-privileges:true]
     logging: *default-logging
 
+  minio-init:
+    image: ${MINIO_IMAGE:-myblog-minio:RELEASE.2025-10-15T17-29-55Z}
+    build:
+      context: ./deploy/minio
+      args:
+        MINIO_COMMIT: 9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a
+        MINIO_SHORT_COMMIT: 9e49d5e7a648
+        MINIO_VERSION: "2025-10-15T17:29:55Z"
+        MC_COMMIT: 77f82e18b5401a65958f1619df6ebb994634bd88
+        MC_SHORT_COMMIT: 77f82e18b540
+        MC_VERSION: "2025-11-06T16:25:29Z"
+    entrypoint: ["/bin/sh", "/bootstrap/init.sh"]
+    environment:
+      MC_CONFIG_DIR: /tmp/mc
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY}
+      MINIO_BUCKET: blog-media
+    volumes:
+      - ./deploy/minio/init.sh:/bootstrap/init.sh:ro
+    depends_on:
+      minio: { condition: service_healthy }
+    networks: [backend]
+    mem_limit: 80m
+    pids_limit: 50
+    read_only: true
+    tmpfs: ["/tmp:size=16m,noexec,nosuid,nodev"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging: *default-logging
+
   api:
+    image: ${API_IMAGE:-myblog-api:latest}
     build:
       context: ./apps/api
     restart: unless-stopped
+    stop_grace_period: 20s
     environment:
       APP_ENV: ${APP_ENV:-production}
       HTTP_ADDR: :8080
-      TRUSTED_PROXIES: 172.28.0.0/24
-      DATABASE_DSN: blog_user:${BLOG_DB_PASSWORD}@tcp(mysql:3306)/blog?charset=utf8mb4&parseTime=true&loc=UTC&multiStatements=true
+      TRUSTED_PROXIES: ${BACKEND_SUBNET:-172.28.0.0/24}
+      DATABASE_DSN: blog_user:${BLOG_DB_PASSWORD}@tcp(mysql:3306)/blog?charset=utf8mb4&parseTime=true&loc=UTC&multiStatements=true&timeout=5s&readTimeout=10s&writeTimeout=10s
       APP_ORIGIN: ${APP_ORIGIN:?set APP_ORIGIN}
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:?set GITHUB_CLIENT_ID}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:?set GITHUB_CLIENT_SECRET}
@@ -88,7 +156,7 @@ services:
       SESSION_TTL: ${SESSION_TTL:-168h}
       COMMENT_DAILY_LIMIT: ${COMMENT_DAILY_LIMIT:-20}
       COMMENT_DAY_UTC_OFFSET: ${COMMENT_DAY_UTC_OFFSET:-8}
-      ARTALK_DATABASE_DSN: blog_artalk_bridge:${ARTALK_DB_PASSWORD}@tcp(mysql:3306)/artalk?charset=utf8mb4&parseTime=true&loc=UTC
+      ARTALK_DATABASE_DSN: blog_artalk_bridge:${ARTALK_BRIDGE_DB_PASSWORD}@tcp(mysql:3306)/artalk?charset=utf8mb4&parseTime=true&loc=UTC&timeout=5s&readTimeout=10s&writeTimeout=10s
       ARTALK_INTERNAL_URL: http://artalk:23366
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
@@ -96,9 +164,12 @@ services:
       MINIO_BUCKET: blog-media
       MINIO_USE_SSL: "false"
       MEDIA_PUBLIC_URL: /uploads
+      HTTP_SHUTDOWN_TIMEOUT: 10s
     depends_on:
       mysql: { condition: service_healthy }
-      minio: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
+      artalk: { condition: service_healthy }
+      artalk-bridge-init: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/readyz"]
       interval: 10s
@@ -125,9 +196,9 @@ services:
       ATK_TRUSTED_DOMAINS: ${APP_ORIGIN}
       ATK_APP_KEY: ${ARTALK_APP_KEY:?set ARTALK_APP_KEY}
       ATK_DB_TYPE: mysql
-      ATK_DB_DSN: artalk_user:${ARTALK_DB_PASSWORD}@tcp(mysql:3306)/artalk?charset=utf8mb4&parseTime=true&loc=UTC
+      ATK_DB_DSN: artalk_user:${ARTALK_DB_PASSWORD}@tcp(mysql:3306)/artalk?charset=utf8mb4&parseTime=true&loc=UTC&timeout=5s&readTimeout=10s&writeTimeout=10s
       ATK_HTTP_PROXY_HEADER: X-Forwarded-For
-      ATK_HTTP_BODY_LIMIT: "10"
+      ATK_HTTP_BODY_LIMIT: "1"
       ATK_MODERATOR_PENDING_DEFAULT: "true"
       ATK_CAPTCHA_ENABLED: "true"
       ATK_CAPTCHA_ACTION_LIMIT: "3"
@@ -160,7 +231,35 @@ services:
       timeout: 5s
       retries: 12
 
+  artalk-bridge-init:
+    image: ${MYSQL_IMAGE:-myblog-mysql:8.4.10-hardened}
+    build:
+      context: ./deploy/mysql
+      args:
+        GOSU_COMMIT: 6456aaa0f3c854d199d0f037f068eb97515b7513
+    entrypoint: ["/bin/sh", "/bootstrap/init-artalk-bridge.sh"]
+    environment:
+      MYSQL_HISTFILE: /dev/null
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD}
+      ARTALK_BRIDGE_DB_PASSWORD: ${ARTALK_BRIDGE_DB_PASSWORD:?set ARTALK_BRIDGE_DB_PASSWORD}
+    volumes:
+      - mysql-socket:/var/run/mysqld
+      - ./deploy/mysql/init-artalk-bridge.sh:/bootstrap/init-artalk-bridge.sh:ro
+    depends_on:
+      config-check: { condition: service_completed_successfully }
+      mysql: { condition: service_healthy }
+      artalk: { condition: service_healthy }
+    network_mode: none
+    mem_limit: 80m
+    pids_limit: 50
+    read_only: true
+    tmpfs: ["/tmp:size=16m,noexec,nosuid,nodev"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging: *default-logging
+
   web:
+    image: ${WEB_IMAGE:-myblog-web:latest}
     build:
       context: .
       dockerfile: apps/web/Dockerfile
@@ -182,4 +281,7 @@ networks:
   backend:
     ipam:
       config:
-        - subnet: 172.28.0.0/24
+        - subnet: ${BACKEND_SUBNET:-172.28.0.0/24}
+
+volumes:
+  mysql-socket:

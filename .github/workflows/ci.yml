@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository:
+    name: Repository and deployment boundaries
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Check tracked-file boundaries
+        run: ./deploy/check-repository.sh
+
+      - name: Test deployment scripts
+        run: ./deploy/test-scripts.sh
+
+      - name: Parse Compose configurations
+        env:
+          GITHUB_CLIENT_ID: ci-client-id
+          GITHUB_CLIENT_SECRET: ci-client-secret
+          ADMIN_GITHUB_ID: "1"
+        run: |
+          docker compose --env-file .env.example -f compose.yml config --quiet
+          docker compose --env-file .env.example -f compose.yml -f compose.https.yml config --quiet
+
+  backend:
+    name: Go API
+    runs-on: ubuntu-24.04
+    services:
+      mysql:
+        image: mysql:8.4@sha256:5700b0892591a760c4caef7a0024c887afd46317d73dd420801706e661c4db56
+        env:
+          MYSQL_ROOT_PASSWORD: ciRootPassword1234567890
+          MYSQL_DATABASE: blog_test
+          MYSQL_USER: blog_test
+          MYSQL_PASSWORD: ciBlogPassword1234567890
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pciRootPassword1234567890 --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      MYSQL_TEST_DSN: "blog_test:ciBlogPassword1234567890@tcp(127.0.0.1:3306)/blog_test?charset=utf8mb4&parseTime=true&loc=UTC&multiStatements=true"
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: apps/api/go.mod
+          cache-dependency-path: apps/api/go.sum
+
+      - name: Verify modules
+        run: go mod verify
+
+      - name: Test
+        run: go test -count=1 ./...
+
+      - name: Race test
+        run: go test -race -count=1 ./internal/auth ./internal/upload ./internal/httpapi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Scan reachable Go vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
+  frontend:
+    name: Vue web
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run type-check
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Audit production and build dependencies
+        run: npm audit --audit-level=high
+
+  container-build:
+    name: Application container builds
+    runs-on: ubuntu-24.04
+    needs: [repository, backend, frontend]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Build API image
+        run: docker build --file apps/api/Dockerfile --tag myblog-api:ci apps/api
+
+      - name: Build web image
+        run: docker build --file apps/web/Dockerfile --tag myblog-web:ci .

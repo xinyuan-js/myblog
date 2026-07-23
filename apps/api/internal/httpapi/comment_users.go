@@ -18,13 +18,26 @@ type commentUserHandler struct {
 }
 
 func (h commentUserHandler) list(c *gin.Context) {
-	items, err := h.service.ListCommentUsers(c.Request.Context(), c.Query("q"))
+	page, ok := positiveQueryInt(c, "page", 1, 1_000)
+	if !ok {
+		return
+	}
+	pageSize, ok := positiveQueryInt(c, "pageSize", 20, 100)
+	if !ok {
+		return
+	}
+	query := strings.TrimSpace(c.Query("q"))
+	if utf8.RuneCountInString(query) > 100 {
+		writeError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "搜索关键词不能超过 100 个字符")
+		return
+	}
+	result, err := h.service.ListCommentUsers(c.Request.Context(), query, page, pageSize)
 	if err != nil {
 		h.internalError(c, "list comment users", err)
 		return
 	}
 	c.Header("Cache-Control", "no-store")
-	c.JSON(http.StatusOK, gin.H{"data": items})
+	c.JSON(http.StatusOK, gin.H{"data": result})
 }
 
 func (h commentUserHandler) update(c *gin.Context) {

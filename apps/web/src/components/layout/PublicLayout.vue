@@ -33,14 +33,14 @@ function scheduleScrollUpdate() {
 
 function refreshPublicDataWhenVisible() {
   if (document.visibilityState === 'visible') {
-    void refreshSiteProfile()
-    void refreshTaxonomies()
+    void refreshSiteProfile({ force: false })
+    void refreshTaxonomies({ force: false })
   }
 }
 
 function handleSiteDataUpdate(event: StorageEvent) {
-  if (event.key === siteProfileUpdatedStorageKey) void refreshSiteProfile()
-  if (event.key === siteTaxonomiesUpdatedStorageKey) void refreshTaxonomies()
+  if (event.key === siteProfileUpdatedStorageKey) void refreshSiteProfile({ force: true })
+  if (event.key === siteTaxonomiesUpdatedStorageKey) void refreshTaxonomies({ force: true })
 }
 
 watch(() => profile.value?.bannerUrl, () => { bannerReady.value = false })

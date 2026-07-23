@@ -114,6 +114,10 @@ export interface AuthState {
 
 export interface Administrator {
   githubId: number
+  login: string
+  name: string
+  avatarUrl: string
+  hasSignedIn: boolean
   isOwner: boolean
   grantedAt: ISODateTime | null
 }
@@ -138,6 +142,32 @@ export interface CommentPolicyMutation {
   commentsBlocked: boolean
   commentBlockReason: string
   dailyLimit: number | null
+}
+
+export interface CommentUserQuery {
+  page?: number
+  pageSize?: number
+  q?: string
+}
+
+export interface AuditEvent {
+  id: number
+  actorGithubId: number
+  actorLogin: string
+  method: 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+  requestPath: string
+  responseStatus: number
+  requestId: string
+  clientIp: string
+  resourceLocation: string
+  occurredAt: ISODateTime
+}
+
+export interface AuditEventQuery {
+  page?: number
+  pageSize?: number
+  outcome?: 'all' | 'success' | 'failure'
+  q?: string
 }
 
 export interface ArtalkSession {
@@ -171,7 +201,8 @@ export interface UploadResult {
   size: number
 }
 
-export type UploadStatus = 'active' | 'trashed'
+export type UploadStatus = 'active' | 'trashed' | 'deleting'
+export type UploadFilterStatus = Exclude<UploadStatus, 'deleting'>
 
 export interface UploadReference {
   resourceType: 'site_avatar' | 'site_banner' | 'site_about' | 'post_cover' | 'post_content'
@@ -193,7 +224,7 @@ export interface MediaItem extends UploadResult {
 export interface MediaQuery {
   page?: number
   pageSize?: number
-  status?: UploadStatus
+  status?: UploadFilterStatus
   usage?: 'all' | 'used' | 'unused'
   q?: string
 }

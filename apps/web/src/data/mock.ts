@@ -1,5 +1,5 @@
 import type { Category, PostDetail, SiteProfile, Tag } from '@/types/blog'
-import bannerUrl from '@/assets/home-background.png'
+import bannerUrl from '@/assets/home-background.webp'
 
 export const mockSiteProfile: SiteProfile = {
   title: 'MyBlog',

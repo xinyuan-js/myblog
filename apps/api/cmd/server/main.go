@@ -3,12 +3,16 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/example/myblog/apps/api/internal/audit"
 	"github.com/example/myblog/apps/api/internal/auth"
 	"github.com/example/myblog/apps/api/internal/blog"
 	"github.com/example/myblog/apps/api/internal/config"
@@ -28,7 +32,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	startupContext, startupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	startupContext, startupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer startupCancel()
 	db, err := database.Open(startupContext, cfg)
 	if err != nil {
@@ -56,6 +60,10 @@ func main() {
 		os.Exit(1)
 	}
 	authService.SetArtalkDatabase(artalkDB)
+	if err := authService.ReconcileArtalkAdministrators(startupContext); err != nil {
+		logger.Error("reconcile Artalk administrators", "error", err)
+		os.Exit(1)
+	}
 	minioStore, err := storage.NewMinIO(cfg)
 	if err != nil {
 		logger.Error("create MinIO client", "error", err)
@@ -65,10 +73,39 @@ func main() {
 		logger.Error("prepare MinIO bucket", "error", err)
 		os.Exit(1)
 	}
+	startupCancel()
 	uploadService := upload.NewService(db, minioStore, cfg)
+	auditService := audit.NewService(db)
+	artalkHTTPClient := &http.Client{
+		Timeout: time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 
 	router, err := httpapi.NewRouter(cfg, logger, httpapi.Dependencies{
-		DB: db, PublicStore: blogStore, AdminStore: blogStore, Auth: authService, Uploads: uploadService, MinIOReady: minioStore.Ready,
+		DB: db, PublicStore: blogStore, AdminStore: blogStore, Auth: authService,
+		Audit: auditService, Uploads: uploadService,
+		MinIOReady: minioStore.Ready,
+		ArtalkReady: func(ctx context.Context) error {
+			if err := artalkDB.PingContext(ctx); err != nil {
+				return err
+			}
+			request, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.ArtalkInternalURL+"/api/v2/conf", nil)
+			if err != nil {
+				return err
+			}
+			response, err := artalkHTTPClient.Do(request)
+			if err != nil {
+				return err
+			}
+			defer response.Body.Close()
+			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+			if response.StatusCode != http.StatusOK {
+				return fmt.Errorf("Artalk readiness returned status %d", response.StatusCode)
+			}
+			return nil
+		},
 	})
 	if err != nil {
 		logger.Error("create HTTP router", "error", err)
@@ -77,11 +114,22 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go runMaintenance(ctx, db, uploadService, logger)
+	maintenanceDone := make(chan struct{})
+	go func() {
+		defer close(maintenanceDone)
+		runMaintenance(ctx, db, uploadService, logger)
+	}()
 
 	logger.Info("starting API server", "address", cfg.HTTPAddr, "environment", cfg.Environment)
-	if err := server.Run(ctx, cfg, router, logger); err != nil {
-		logger.Error("API server stopped unexpectedly", "error", err)
+	runError := server.Run(ctx, cfg, router, logger)
+	stop()
+	select {
+	case <-maintenanceDone:
+	case <-time.After(2 * time.Second):
+		logger.Warn("maintenance worker did not stop before process shutdown")
+	}
+	if runError != nil {
+		logger.Error("API server stopped unexpectedly", "error", runError)
 		os.Exit(1)
 	}
 	logger.Info("API server stopped")
@@ -103,6 +151,14 @@ func runMaintenance(ctx context.Context, db interface {
 			`DELETE FROM comment_daily_usage WHERE usage_date < UTC_DATE() - INTERVAL 90 DAY`,
 		); err != nil {
 			logger.Error("clean old comment usage", "error", err)
+		}
+		if _, err := db.ExecContext(maintenanceContext,
+			`DELETE FROM admin_audit_events WHERE occurred_at < UTC_TIMESTAMP(6) - INTERVAL 365 DAY`,
+		); err != nil {
+			logger.Error("clean old administrator audit events", "error", err)
+		}
+		if err := uploads.CleanupPending(maintenanceContext, time.Now().UTC().Add(-time.Hour), 100); err != nil {
+			logger.Error("clean interrupted uploads", "error", err)
 		}
 		if err := uploads.CleanupTrashed(maintenanceContext, time.Now().UTC().Add(-30*24*time.Hour), 100); err != nil {
 			logger.Error("clean trashed uploads", "error", err)

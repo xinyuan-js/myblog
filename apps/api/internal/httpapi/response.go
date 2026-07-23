@@ -14,6 +14,10 @@ func writeError(c *gin.Context, status int, code, message string) {
 }
 
 func writeErrorFields(c *gin.Context, status int, code, message string, fields map[string]string) {
+	// Several error statuses (including 404) are cacheable by default. A
+	// cached missing-post response would hide a later publication, and error
+	// payloads also contain request-specific identifiers.
+	c.Header("Cache-Control", "no-store")
 	c.AbortWithStatusJSON(status, errorResponse{
 		Code: code, Message: message, FieldErrors: fields, RequestID: requestIDFromContext(c),
 	})

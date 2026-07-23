@@ -9,8 +9,6 @@ import (
 	"image/color"
 	"image/png"
 	"io"
-	"mime/multipart"
-	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -65,8 +63,8 @@ func TestMySQLBlogAndMediaLifecycle(t *testing.T) {
 	}
 	objects := &memoryObjects{values: map[string][]byte{}}
 	media := upload.NewService(db, objects, cfg)
-	header := pngFileHeader(t)
-	asset, err := media.Create(context.Background(), header, 1)
+	input := pngUpload(t)
+	asset, err := media.Create(context.Background(), input, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,11 +114,39 @@ func TestMySQLBlogAndMediaLifecycle(t *testing.T) {
 	if err := store.DeletePost(context.Background(), post.ID); err != nil {
 		t.Fatal(err)
 	}
+	trashPage, err := store.ListAdminPosts(context.Background(), blog.AdminPostQuery{
+		Page: 1, PageSize: 10, Trashed: true,
+	})
+	if err != nil || trashPage.Pagination.Total != 1 || trashPage.Items[0].ID != post.ID ||
+		len(trashPage.Items[0].Tags) != 1 || trashPage.Items[0].Category == nil {
+		t.Fatalf("trashed post associations = %+v, %v", trashPage, err)
+	}
+	if err := store.DeleteTag(context.Background(), tag.ID); !errors.Is(err, blog.ErrTaxonomyInUse) {
+		t.Fatalf("trashed post tag must remain protected: %v", err)
+	}
+	if err := store.DeleteCategory(context.Background(), category.ID); !errors.Is(err, blog.ErrTaxonomyInUse) {
+		t.Fatalf("trashed post category must remain protected: %v", err)
+	}
+	if err := media.Trash(context.Background(), asset.ID); !errors.Is(err, upload.ErrInUse) {
+		t.Fatalf("trashed post media must remain protected: %v", err)
+	}
+	if err := store.RestorePost(context.Background(), post.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PublicPost(context.Background(), post.Slug); err != nil {
+		t.Fatalf("restored post should be public again: %v", err)
+	}
+	if err := store.DeletePost(context.Background(), post.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeletePostPermanent(context.Background(), post.ID); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.DeleteTag(context.Background(), tag.ID); err != nil {
-		t.Fatalf("tag should be releasable after its last post is deleted: %v", err)
+		t.Fatalf("tag should be releasable after permanent deletion: %v", err)
 	}
 	if err := store.DeleteCategory(context.Background(), category.ID); err != nil {
-		t.Fatalf("category should be releasable after its last post is deleted: %v", err)
+		t.Fatalf("category should be releasable after permanent deletion: %v", err)
 	}
 	if err := media.Trash(context.Background(), asset.ID); err != nil {
 		t.Fatal(err)
@@ -169,7 +195,7 @@ func resetDatabase(t *testing.T, db *sql.DB) {
 	}
 }
 
-func pngFileHeader(t *testing.T) *multipart.FileHeader {
+func pngUpload(t *testing.T) upload.Input {
 	t.Helper()
 	picture := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	picture.Set(0, 0, color.RGBA{R: 255, A: 255})
@@ -177,24 +203,5 @@ func pngFileHeader(t *testing.T) *multipart.FileHeader {
 	if err := png.Encode(&imageBody, picture); err != nil {
 		t.Fatal(err)
 	}
-	var requestBody bytes.Buffer
-	writer := multipart.NewWriter(&requestBody)
-	part, err := writer.CreateFormFile("file", "pixel.png")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := part.Write(imageBody.Bytes()); err != nil {
-		t.Fatal(err)
-	}
-	writer.Close()
-	request := httptest.NewRequest("POST", "/", &requestBody)
-	request.Header.Set("Content-Type", writer.FormDataContentType())
-	if err := request.ParseMultipartForm(1 << 20); err != nil {
-		t.Fatal(err)
-	}
-	_, header, err := request.FormFile("file")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return header
+	return upload.Input{Filename: "pixel.png", DeclaredContentType: "image/png", Body: imageBody.Bytes()}
 }

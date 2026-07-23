@@ -3,7 +3,7 @@
 > 状态：前端契约基线  
 > 对应前端：`apps/web`  
 > API 前缀：`/api`  
-> 评论服务：Artalk，生产环境由 `/comments` 反向代理，不属于本 API
+> 评论服务：Artalk；生产环境的 `/comments` 必须先经过 Gin 策略网关再转发到 Artalk
 
 后端框架固定使用 Gin（当前锁定 `v1.11.0`），Go 模块声明为 Go 1.26.5。项目不再同时维护 `net/http`、Echo、Fiber 等其他路由实现；Gin 负责路由、参数绑定和中间件编排，业务规则仍放在领域/用例层，不能写入 Handler。
 
@@ -27,16 +27,17 @@
 - GitHub 统一登录和服务端会话，按不可变数字 ID 授予管理权限；
 - 管理端文章、标签和分类 CRUD；
 - 封面、正文图片和附件上传；
-- 数据校验、权限校验、CSRF 和审计日志。
+- 评论 GitHub 身份桥接、封禁、每日额度和 Artalk 代理策略；
+- 数据校验、权限校验、CSRF 和结构化请求日志。
 
 ### Artalk 负责
 
-- 评论、回复、评论者身份；
+- 评论、回复及其审核状态；
 - 评论审核、验证码、限流和反垃圾；
 - 评论通知和评论后台；
-- 评论图片上传（若启用）。
+- 评论管理员界面。
 
-Go API 不建立评论表，不代理 Artalk 用户，不把 Artalk 管理接口包装成自己的接口。
+Go API 不建立评论正文表，也不重写 Artalk 管理接口；但会保存 GitHub 用户与评论策略，签发短期 SSO 身份，并把全部 `/comments` 流量通过内部代理转发。所有评论写操作必须验证本站会话和 Origin，创建评论还需要原子预占每日额度。评论图片上传默认关闭，避免绕过博客媒体管理。
 
 ## 3. 通用 HTTP 契约
 
@@ -242,6 +243,8 @@ Go API 不建立评论表，不代理 Artalk 用户，不把 Artalk 管理接口
 - `tagIds` 去重，全部必须存在，建议最多 20 个；
 - `coverUrl` 可为 `null`。
 
+文章 JSON 请求体上限为 3 MiB，为键名和 JSON 转义保留空间；其中 `contentMarkdown` 解码后的字段上限仍为 2 MiB。超过请求体上限返回 `413 REQUEST_TOO_LARGE`。
+
 #### 定时发布不需要后台任务
 
 数据库只需存储 `draft` 或 `published` 两种持久状态：
@@ -358,12 +361,13 @@ GET /api/auth/github/callback?code=...&state=...
 - 服务端使用 Client Secret 换取 GitHub Token；
 - 调用 GitHub 用户接口取得不可变数字 `id`；
 - 使用 GitHub 数字 ID 判断配置所有者或数据库中的授权管理员；
+- GitHub 用户名和主邮箱允许变化，不作为唯一账户主键；已有会话读取 `github_users` 中的最新资料；
 - 不接受前端传入的管理员角色；
 - 登录完成后立即丢弃 GitHub Access Token，V1 不需要持久化；
 - 创建博客自己的随机会话；
 - 重定向到已校验的 `return_to`。
 
-失败时重定向 `/admin/login?error={code}`，前端识别以下稳定错误码：
+失败时重定向 `/login?error={code}`，前端识别以下稳定错误码：
 
 - `access_denied`：用户取消 GitHub 授权；
 - `state_invalid`：state 缺失、过期或已使用；
@@ -479,7 +483,15 @@ PUT /api/admin/posts/{id}
 DELETE /api/admin/posts/{id}
 ```
 
-返回 `204`。建议使用软删除 `deleted_at`，避免误操作立即造成不可恢复的数据损失。V1 不要求恢复 UI，但备份和运维可以恢复。关联上传文件不要在事务中直接删除，先保留为未引用资源，后续维护任务再清理。
+返回 `204` 并将文章移入回收站。普通删除只设置 `deleted_at`，保留分类、标签和媒体引用，因此被删除文章仍能完整恢复，相关分类、标签和媒体在此期间不能删除。
+
+```http
+GET    /api/admin/posts/trash
+POST   /api/admin/posts/{id}/restore
+DELETE /api/admin/posts/{id}/permanent
+```
+
+回收站使用独立分页列表。恢复操作只允许处理已删除文章；永久删除也只允许处理回收站文章，并在同一事务中删除文章及其标签关系、释放媒体引用。对仍处于正常状态的文章调用恢复或永久删除均返回 `404`，避免错误操作绕过回收站。
 
 ### 7.6 标签 CRUD
 
@@ -544,6 +556,7 @@ file=<binary>
 V1 上传规则：
 
 - 最大 10 MiB；
+- multipart 请求必须且只能包含一个名为 `file` 的文件，不接受额外文件或表单字段；
 - 图片允许 JPEG、PNG、WebP、GIF；
 - 附件若开放，使用独立白名单，不允许 HTML、SVG、JS 和可执行文件；
 - 同时检查扩展名、声明 MIME 和真实文件头；
@@ -555,7 +568,25 @@ V1 上传规则：
 - Nginx 将 `/uploads/` 映射为 Bucket 的公开只读访问，不允许列目录或写入；
 - 建议返回 `X-Content-Type-Options: nosniff`。
 
+上传入口不能先用默认 `ParseMultipartForm` 将整个文件保存在内存、再在校验层复制一次。当前实现直接读取唯一文件 Part，只保留一份受限字节切片，并用进程级并发槽最多同时处理两个上传；槽满返回带 `Retry-After` 的 429。
+
+Nginx 入口仅对上传接口放行 11 MiB；文章 JSON 为 3 MiB，站点设置 JSON 为 2 MiB，评论为 1 MiB，其余 API 为 64 KiB。站点设置中的 `aboutMarkdown` 解码后仍限制为 1 MiB。
+
 MinIO 与博客服务部署在同一台服务器，Bucket 数据持久化到本地云盘的 `/data/minio/`；它是本地文件之上的 S3 兼容管理层，而不是 V1 额外购买的云存储。Go 业务层只依赖 `Storage` 接口。对象存储只负责文件本身；鉴权、媒体元数据、引用关系、回收站和永久删除仍由博客后端管理。
+
+MinIO 是显式配置的私有依赖，客户端不得继承 `HTTP_PROXY`/`HTTPS_PROXY` 后转发带签名请求。连接、TLS、响应头、上传、删除和 Bucket 探测都必须有截止时间。V1 文件上限低于单对象 PUT 限制，应显式关闭 multipart；不能依赖 SDK 当前的默认分片阈值，否则未来升级后可能产生媒体数据库无法枚举和回收的残留分片。
+
+### 7.9 管理操作审计
+
+已通过管理员会话的 `POST`、`PUT`、`PATCH` 和 `DELETE` 请求在处理结束后写入 `admin_audit_events`。记录只包含 GitHub 数字 ID/用户名、HTTP 方法、请求路径、响应状态、请求 ID、来源 IP、资源 `Location` 和发生时间，不保存请求正文、Cookie、Token 或密钥。
+
+```http
+GET /api/admin/audit-events?page=1&pageSize=30&outcome=all&q=
+```
+
+查询接口仅站点所有者可用。`outcome` 支持 `all`、`success` 和 `failure`，搜索覆盖管理员用户名、请求路径与请求 ID。后台维护任务每天清理超过 365 天的事件。
+
+审计中间件位于管理员认证之后、CSRF 和具体 Handler 之前，因此会记录有效管理员会话下的成功请求、参数错误、CSRF 拒绝、所有者权限拒绝和服务错误；未通过管理员认证的请求不会产生管理员审计事件。审计写入设置独立的两秒上限，但不与各业务事务原子绑定，写入失败只进入服务器错误日志，不改变原业务响应。
 
 ## 8. MySQL 数据模型
 
@@ -653,7 +684,7 @@ created_at DATETIME(6) NOT NULL
 deleted_at DATETIME(6) NULL
 ```
 
-补充保存图片的 `width`、`height` 和状态字段。状态至少包含 `active` 与 `trashed`，进入回收站只更新状态和时间，不立即删除 MinIO 对象。
+补充保存图片的 `width`、`height` 和状态字段。状态包含 `uploading`、`active`、`trashed` 与 `deleting`。上传先持久化不可见的 `uploading` 元数据，再写对象并转为 `active`；超过一小时的中断上传由维护任务原子认领为 `deleting` 后清理，防止 MinIO 孤儿对象。进入回收站只更新状态和时间，不立即删除 MinIO 对象；永久删除先持久化 `deleting`，再删除对象和数据库记录。若跨存储收尾中断，`deleting` 记录仍显示在回收站，只能重试永久清理，不能恢复。
 
 ### 8.6.1 `upload_references`
 
@@ -671,6 +702,10 @@ created_at DATETIME(6) NOT NULL
 ### 8.7 `site_settings`
 
 使用单行设置表保存站点资料及 `avatar_url`、`banner_url`。更新站点外观时应在事务内锁定该行并更新时间；必须经过结构化校验，不能向前端透传任意 HTML。删除展示图片只清空引用，上传文件的回收由独立的孤立文件清理任务处理，避免误删仍被文章引用的资源。
+
+### 8.8 `admin_audit_events`
+
+持久化保存管理写操作元数据，按发生时间和操作者建立索引。该表不保存请求正文或认证材料；保留期由每日维护任务执行。审计写入与被审计业务事务相互独立，因此它用于日常追踪和问题定位，不能视为不可篡改的合规账本。
 
 ## 9. 查询和事务要求
 
@@ -718,11 +753,11 @@ V1 不引入 Redis。
 
 | 路由 | 建议限制 |
 | --- | --- |
-| 公开 GET | 120 次/分钟/IP |
-| `/auth/github` | 10 次/10 分钟/IP |
-| OAuth callback | 30 次/10 分钟/IP |
-| 管理写接口 | 60 次/分钟/会话 |
-| 上传 | 20 次/小时/会话 |
+| Nginx `/api/` | 10 次/秒/IP，突发 40 |
+| Nginx `/comments/` | 5 次/秒/IP，突发 20 |
+| GitHub 发起、回调与评论会话 | 合计 20 次/分钟/IP |
+| 上传 | 30 次/分钟/IP |
+| 普通用户创建评论 | 默认 20 条/自然日，可按用户覆盖 |
 
 Nginx 也可增加外层限制，但 Go 后端仍需要保护认证和上传端点。
 
@@ -751,10 +786,13 @@ Artalk.init({
 - `app_key` 使用高熵密钥；
 - 配置 `trusted_domains`；
 - 默认启用图片验证码和评论审核策略；
-- Nginx 将 `/comments/` 正确反代到 Artalk；
+- Nginx 将 `/comments/` 反代到 Gin 的 `/internal/artalk/`，Gin 再转发到 Artalk；
+- 不允许通过额外端口、子域名或第二条 Nginx 规则绕过 Gin 评论策略网关；
 - Artalk 管理后台仍由 Artalk 自己提供。
 
-需要在正式 Nginx 配置阶段验证“子路径部署”是否与选定 Artalk 版本完全兼容；若版本对资源路径支持不完整，改为同域子域名 `comments.example.com`，前端只需修改 `VITE_ARTALK_SERVER`。
+锁定的 Artalk SSO 实现虽然读取 OIDC `sub`，但创建用户时实际按邮箱查找。本站因此不能直接把邮箱当作长期评论身份：`github_users.artalk_user_id` 保存 GitHub 数字 ID 与 Artalk 用户 ID 的稳定映射；首次交换后绑定，后续 GitHub 主邮箱变化时先更新已绑定的 Artalk 用户，再交换 Token。若新邮箱已经属于另一个 Artalk 用户，必须返回冲突并由管理员核对，不能静默合并或把旧评论交给另一个账号。
+
+需要在正式 Nginx 配置阶段验证固定 Artalk 版本的子路径资源、通知和管理 iframe；若版本不兼容，应先升级或修复网关映射，不能改成可绕过本站策略的 Artalk 公网入口。
 
 ## 13. Go 工程建议
 
@@ -777,6 +815,10 @@ apps/api/
 ```
 
 HTTP 入口使用 `gin.New()`，显式安装请求 ID、访问日志和恢复中间件，不使用带默认日志器的 `gin.Default()`。默认不信任任何代理头；生产环境只通过 `TRUSTED_PROXIES` 配置真实 Nginx 地址或 CIDR。
+
+生产 MySQL DSN 必须设置非零 `timeout`、`readTimeout` 和 `writeTimeout`，避免网络半断永久占用有限连接池。MySQL DDL 不能依赖事务回滚。迁移器会在执行新迁移前写入 `schema_migration_attempts`；若进程在 DDL 或迁移记录落库前中断，后续启动必须停止并要求从升级前备份恢复或人工核对 schema。只有已存在相同版本和校验和的成功记录时，残留 attempt marker 才会自动清理。
+
+进程收到 SIGTERM 后先停止接收请求，再等待在途请求和后台维护任务退出。容器停止宽限期必须大于应用的 `HTTP_SHUTDOWN_TIMEOUT`，不能让 Docker 在应用超时边界同时发送 SIGKILL。
 
 基础探针：
 

@@ -20,7 +20,7 @@ type authHandler struct {
 
 func (h authHandler) beginGitHub(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
-	target, cookie, err := h.service.BeginLogin(c.Query("return_to"))
+	target, cookie, err := h.service.BeginLogin(c.Request.Context(), c.Query("return_to"))
 	if errors.Is(err, auth.ErrNotConfigured) {
 		writeError(c, http.StatusServiceUnavailable, "OAUTH_NOT_CONFIGURED", "GitHub 登录尚未配置")
 		return

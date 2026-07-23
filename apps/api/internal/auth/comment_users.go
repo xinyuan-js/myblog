@@ -38,9 +38,31 @@ type CommentReservation struct {
 	Reserved bool
 }
 
-func (s *Service) ListCommentUsers(ctx context.Context, query string) ([]CommentUser, error) {
+type CommentUserPage struct {
+	Items      []CommentUser         `json:"items"`
+	Pagination CommentUserPagination `json:"pagination"`
+}
+
+type CommentUserPagination struct {
+	Page       int   `json:"page"`
+	PageSize   int   `json:"pageSize"`
+	Total      int64 `json:"total"`
+	TotalPages int   `json:"totalPages"`
+}
+
+func (s *Service) ListCommentUsers(ctx context.Context, query string, page, pageSize int) (CommentUserPage, error) {
 	query = strings.TrimSpace(query)
-	pattern := "%" + query + "%"
+	pattern := "%" + escapeCommentUserLike(query) + "%"
+	filter := `(? = '' OR u.github_login LIKE ? OR u.display_name LIKE ? OR CAST(u.github_id AS CHAR) LIKE ?)`
+	filterArgs := []any{query, pattern, pattern, pattern}
+	var total int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM github_users u WHERE `+filter,
+		filterArgs...,
+	).Scan(&total); err != nil {
+		return CommentUserPage{}, fmt.Errorf("count comment users: %w", err)
+	}
+
 	usageDate := s.commentUsageDate()
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT u.github_id, u.github_login, u.display_name, u.avatar_url,
@@ -51,12 +73,13 @@ func (s *Service) ListCommentUsers(ctx context.Context, query string) ([]Comment
 		FROM github_users u
 		LEFT JOIN delegated_admins d ON d.github_id = u.github_id
 		LEFT JOIN comment_daily_usage du ON du.github_id = u.github_id AND du.usage_date = ?
-		WHERE (? = '' OR u.github_login LIKE ? OR u.display_name LIKE ? OR CAST(u.github_id AS CHAR) LIKE ?)
+		WHERE `+filter+`
 		ORDER BY u.updated_at DESC, u.github_id DESC
-		LIMIT 200
-	`, s.cfg.GitHubAdminID, s.cfg.GitHubAdminID, usageDate, query, pattern, pattern, pattern)
+		LIMIT ? OFFSET ?
+	`, s.cfg.GitHubAdminID, s.cfg.GitHubAdminID, usageDate,
+		query, pattern, pattern, pattern, pageSize, (page-1)*pageSize)
 	if err != nil {
-		return nil, fmt.Errorf("list comment users: %w", err)
+		return CommentUserPage{}, fmt.Errorf("list comment users: %w", err)
 	}
 	defer rows.Close()
 
@@ -69,7 +92,7 @@ func (s *Service) ListCommentUsers(ctx context.Context, query string) ([]Comment
 			&item.CommentsBlocked, &item.CommentBlockReason, &dailyLimit, &item.TodayCount,
 			&item.CreatedAt, &item.UpdatedAt,
 		); err != nil {
-			return nil, fmt.Errorf("scan comment user: %w", err)
+			return CommentUserPage{}, fmt.Errorf("scan comment user: %w", err)
 		}
 		item.EffectiveDailyLimit = s.cfg.CommentDailyLimit
 		if dailyLimit.Valid {
@@ -80,9 +103,18 @@ func (s *Service) ListCommentUsers(ctx context.Context, query string) ([]Comment
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate comment users: %w", err)
+		return CommentUserPage{}, fmt.Errorf("iterate comment users: %w", err)
 	}
-	return items, nil
+	totalPages := int((total + int64(pageSize) - 1) / int64(pageSize))
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	return CommentUserPage{
+		Items: items,
+		Pagination: CommentUserPagination{
+			Page: page, PageSize: pageSize, Total: total, TotalPages: totalPages,
+		},
+	}, nil
 }
 
 func (s *Service) UpdateCommentPolicy(
@@ -121,16 +153,45 @@ func (s *Service) UpdateCommentPolicy(
 			return CommentUser{}, ErrCommentUserMissing
 		}
 	}
-	items, err := s.ListCommentUsers(ctx, fmt.Sprintf("%d", githubID))
+	item, err := s.commentUser(ctx, githubID)
 	if err != nil {
 		return CommentUser{}, err
 	}
-	for _, item := range items {
-		if item.GitHubID == githubID {
-			return item, nil
-		}
+	return item, nil
+}
+
+func (s *Service) commentUser(ctx context.Context, githubID uint64) (CommentUser, error) {
+	usageDate := s.commentUsageDate()
+	var item CommentUser
+	var dailyLimit sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT u.github_id, u.github_login, u.display_name, u.avatar_url,
+		       (u.github_id = ? OR d.github_id IS NOT NULL) AS is_admin,
+		       (u.github_id = ?) AS is_owner,
+		       u.comments_blocked, u.comment_block_reason, u.comment_daily_limit,
+		       COALESCE(du.comment_count, 0), u.created_at, u.updated_at
+		FROM github_users u
+		LEFT JOIN delegated_admins d ON d.github_id = u.github_id
+		LEFT JOIN comment_daily_usage du ON du.github_id = u.github_id AND du.usage_date = ?
+		WHERE u.github_id = ?
+	`, s.cfg.GitHubAdminID, s.cfg.GitHubAdminID, usageDate, githubID).Scan(
+		&item.GitHubID, &item.Login, &item.Name, &item.AvatarURL, &item.IsAdmin, &item.IsOwner,
+		&item.CommentsBlocked, &item.CommentBlockReason, &dailyLimit, &item.TodayCount,
+		&item.CreatedAt, &item.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CommentUser{}, ErrCommentUserMissing
 	}
-	return CommentUser{}, ErrCommentUserMissing
+	if err != nil {
+		return CommentUser{}, fmt.Errorf("read comment user: %w", err)
+	}
+	item.EffectiveDailyLimit = s.cfg.CommentDailyLimit
+	if dailyLimit.Valid {
+		value := int(dailyLimit.Int64)
+		item.DailyLimit = &value
+		item.EffectiveDailyLimit = value
+	}
+	return item, nil
 }
 
 func (s *Service) CheckCommentAccess(ctx context.Context, session Session) error {
@@ -216,4 +277,8 @@ func (s *Service) commentPolicy(ctx context.Context, githubID uint64) (blocked b
 func (s *Service) commentUsageDate() string {
 	zone := time.FixedZone("comment-day", s.cfg.CommentDayOffset*60*60)
 	return s.now().In(zone).Format("2006-01-02")
+}
+
+func escapeCommentUserLike(value string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(value)
 }

@@ -14,6 +14,9 @@ type Draft = {
 const users = ref<CommentUser[]>([])
 const drafts = ref<Record<number, Draft>>({})
 const query = ref('')
+const page = ref(1)
+const total = ref(0)
+const totalPages = ref(1)
 const loading = ref(true)
 const saving = ref<number | null>(null)
 const toast = useAdminToast()
@@ -28,15 +31,31 @@ function setUsers(items: CommentUser[]) {
   }]))
 }
 
-async function load() {
+async function load(resetPage = false) {
+  if (resetPage) page.value = 1
   loading.value = true
   try {
-    setUsers(await api.listCommentUsers(query.value))
+    const result = await api.listCommentUsers({ q: query.value.trim(), page: page.value, pageSize: 20 })
+    if (result.pagination.total > 0 && page.value > result.pagination.totalPages) {
+      page.value = result.pagination.totalPages
+      await load()
+      return
+    }
+    setUsers(result.items)
+    total.value = result.pagination.total
+    totalPages.value = result.pagination.totalPages
   } catch (cause) {
     toast.error(cause instanceof Error ? cause.message : '用户列表加载失败')
   } finally {
     loading.value = false
   }
+}
+
+function movePage(offset: number) {
+  const next = page.value + offset
+  if (next < 1 || next > totalPages.value || loading.value) return
+  page.value = next
+  void load()
 }
 
 async function save(user: CommentUser) {
@@ -82,7 +101,7 @@ onMounted(() => void load())
   </header>
 
   <section class="card admin-panel search-panel">
-    <form @submit.prevent="load">
+    <form @submit.prevent="load(true)">
       <input
         v-model="query"
         class="admin-input"
@@ -97,7 +116,7 @@ onMounted(() => void load())
   <section class="card admin-panel users-panel">
     <div class="panel-heading">
       <div><h2>评论用户</h2><p>留空每日额度时使用服务器默认值。</p></div>
-      <span>{{ users.length }} 人</span>
+      <span>共 {{ total }} 人</span>
     </div>
     <div v-if="loading" class="loading-state">正在读取用户…</div>
     <div v-else-if="users.length === 0" class="loading-state">没有找到用户</div>
@@ -115,15 +134,19 @@ onMounted(() => void load())
                 <div><strong>{{ user.name }}</strong><small>@{{ user.login }} · {{ user.githubId }}</small></div>
               </div>
             </td>
-            <td><strong>{{ user.todayCount }}</strong> / {{ user.effectiveDailyLimit }}</td>
+            <td>
+              <strong>{{ user.todayCount }}</strong>
+              / {{ user.isAdmin ? '不限' : user.effectiveDailyLimit }}
+            </td>
             <td>
               <input
+                v-if="!user.isAdmin"
                 v-model="drafts[user.githubId]!.dailyLimit"
                 class="admin-input compact"
                 inputmode="numeric"
-                :disabled="user.isAdmin"
                 :placeholder="`默认 ${user.effectiveDailyLimit}`"
               />
+              <span v-else class="status-badge">不限</span>
             </td>
             <td>
               <label v-if="!user.isAdmin" class="block-toggle">
@@ -154,6 +177,11 @@ onMounted(() => void load())
         </tbody>
       </table>
     </div>
+    <nav v-if="totalPages > 1" class="user-pagination" aria-label="评论用户分页">
+      <button class="button" type="button" :disabled="page <= 1 || loading" @click="movePage(-1)">上一页</button>
+      <span>{{ page }} / {{ totalPages }}</span>
+      <button class="button" type="button" :disabled="page >= totalPages || loading" @click="movePage(1)">下一页</button>
+    </nav>
   </section>
 </template>
 
@@ -175,6 +203,8 @@ onMounted(() => void load())
 .admin-input.reason { min-width: 12rem; }
 .block-toggle { display: inline-flex; align-items: center; gap: 0.45rem; white-space: nowrap; cursor: pointer; }
 .block-toggle:has(input:checked) { color: oklch(.58 .18 25); }
+.user-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 0.75rem; margin-top: 1rem; }
+.user-pagination span { color: var(--text-muted); font-size: 0.82rem; }
 @media (max-width: 640px) {
   .search-panel form { grid-template-columns: 1fr; }
 }

@@ -13,8 +13,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/gin-gonic/gin"
 	"github.com/example/myblog/apps/api/internal/blog"
+	"github.com/gin-gonic/gin"
 )
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
@@ -38,19 +38,9 @@ func (h publicHandler) site(c *gin.Context) {
 		h.internalError(c, "get site profile", err)
 		return
 	}
-	encoded, err := json.Marshal(profile)
-	if err != nil {
+	if err := writePublicData(c, profile, "public, max-age=0, must-revalidate"); err != nil {
 		h.internalError(c, "encode site profile", err)
-		return
 	}
-	etag := fmt.Sprintf(`"%x"`, sha256.Sum256(encoded))
-	c.Header("Cache-Control", "public, max-age=0, must-revalidate")
-	c.Header("ETag", etag)
-	if c.GetHeader("If-None-Match") == etag {
-		c.Status(http.StatusNotModified)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"data": profile})
 }
 
 func (h publicHandler) tags(c *gin.Context) {
@@ -59,8 +49,9 @@ func (h publicHandler) tags(c *gin.Context) {
 		h.internalError(c, "list public tags", err)
 		return
 	}
-	c.Header("Cache-Control", "public, max-age=0, must-revalidate")
-	c.JSON(http.StatusOK, gin.H{"data": items})
+	if err := writePublicData(c, items, "public, max-age=60"); err != nil {
+		h.internalError(c, "encode public tags", err)
+	}
 }
 
 func (h publicHandler) categories(c *gin.Context) {
@@ -69,12 +60,13 @@ func (h publicHandler) categories(c *gin.Context) {
 		h.internalError(c, "list public categories", err)
 		return
 	}
-	c.Header("Cache-Control", "public, max-age=0, must-revalidate")
-	c.JSON(http.StatusOK, gin.H{"data": items})
+	if err := writePublicData(c, items, "public, max-age=60"); err != nil {
+		h.internalError(c, "encode public categories", err)
+	}
 }
 
 func (h publicHandler) posts(c *gin.Context) {
-	page, ok := positiveQueryInt(c, "page", 1, 1_000_000)
+	page, ok := positiveQueryInt(c, "page", 1, 1_000)
 	if !ok {
 		return
 	}
@@ -104,8 +96,9 @@ func (h publicHandler) posts(c *gin.Context) {
 		h.internalError(c, "list public posts", err)
 		return
 	}
-	c.Header("Cache-Control", "public, max-age=60")
-	c.JSON(http.StatusOK, gin.H{"data": result})
+	if err := writePublicData(c, result, "public, max-age=60"); err != nil {
+		h.internalError(c, "encode public posts", err)
+	}
 }
 
 func (h publicHandler) post(c *gin.Context) {
@@ -123,8 +116,35 @@ func (h publicHandler) post(c *gin.Context) {
 		h.internalError(c, "get public post", err)
 		return
 	}
-	c.Header("Cache-Control", "public, max-age=60")
-	c.JSON(http.StatusOK, gin.H{"data": item})
+	if err := writePublicData(c, item, "public, max-age=60"); err != nil {
+		h.internalError(c, "encode public post", err)
+	}
+}
+
+func writePublicData(c *gin.Context, value any, cacheControl string) error {
+	encoded, err := json.Marshal(gin.H{"data": value})
+	if err != nil {
+		return err
+	}
+	etag := fmt.Sprintf(`"%x"`, sha256.Sum256(encoded))
+	c.Header("Cache-Control", cacheControl)
+	c.Header("ETag", etag)
+	if etagMatches(c.GetHeader("If-None-Match"), etag) {
+		c.Status(http.StatusNotModified)
+		return nil
+	}
+	c.Data(http.StatusOK, "application/json; charset=utf-8", encoded)
+	return nil
+}
+
+func etagMatches(header, current string) bool {
+	for _, candidate := range strings.Split(header, ",") {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "*" || candidate == current || strings.TrimPrefix(candidate, "W/") == current {
+			return true
+		}
+	}
+	return false
 }
 
 func (h publicHandler) internalError(c *gin.Context, operation string, err error) {

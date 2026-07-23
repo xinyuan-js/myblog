@@ -1,5 +1,7 @@
 import { mockCategories, mockPosts, mockSiteProfile, mockTags } from '@/data/mock'
 import type {
+  AuditEvent,
+  AuditEventQuery,
   ArtalkSession,
   Administrator,
   AuthState,
@@ -7,6 +9,7 @@ import type {
   Category,
   CommentPolicyMutation,
   CommentUser,
+  CommentUserQuery,
   Paginated,
   PostDetail,
   PostMutation,
@@ -46,13 +49,17 @@ export interface BlogApi {
   listAdministrators(): Promise<Administrator[]>
   addAdministrator(githubId: number): Promise<Administrator>
   removeAdministrator(githubId: number): Promise<void>
-  listCommentUsers(query?: string): Promise<CommentUser[]>
+  listCommentUsers(query?: CommentUserQuery): Promise<Paginated<CommentUser>>
   updateCommentPolicy(githubId: number, input: CommentPolicyMutation): Promise<CommentUser>
+  listAuditEvents(query?: AuditEventQuery): Promise<Paginated<AuditEvent>>
   listAdminPosts(query?: PostQuery): Promise<Paginated<PostSummary>>
+  listTrashedPosts(query?: Pick<PostQuery, 'page' | 'pageSize'>): Promise<Paginated<PostSummary>>
   getAdminPost(id: number): Promise<PostDetail>
   createPost(input: PostMutation): Promise<PostDetail>
   updatePost(id: number, input: PostMutation): Promise<PostDetail>
   deletePost(id: number): Promise<void>
+  restorePost(id: number): Promise<void>
+  deletePostPermanent(id: number): Promise<void>
   createTag(input: TaxonomyMutation): Promise<Tag>
   updateTag(id: number, input: TaxonomyMutation): Promise<Tag>
   deleteTag(id: number): Promise<void>
@@ -75,8 +82,12 @@ const clone = <T>(value: T): T => structuredClone(value)
 class MockBlogApi implements BlogApi {
   private authenticated = false
   private uploads: MediaItem[] = []
+  private trashedPosts: PostDetail[] = []
   private administrators: Administrator[] = [
-    { githubId: 12345678, isOwner: true, grantedAt: null },
+    {
+      githubId: 12345678, login: 'example-owner', name: '示例站长', avatarUrl: '',
+      hasSignedIn: true, isOwner: true, grantedAt: null,
+    },
   ]
   private commentUsers: CommentUser[] = [
     {
@@ -84,6 +95,14 @@ class MockBlogApi implements BlogApi {
       isAdmin: false, isOwner: false, commentsBlocked: false, commentBlockReason: '',
       dailyLimit: null, effectiveDailyLimit: 20, todayCount: 2,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    },
+  ]
+  private auditEvents: AuditEvent[] = [
+    {
+      id: 1, actorGithubId: 12345678, actorLogin: 'example-owner',
+      method: 'PUT', requestPath: '/api/admin/site/appearance', responseStatus: 200,
+      requestId: 'mock-request-id', clientIp: '127.0.0.1', resourceLocation: '',
+      occurredAt: new Date().toISOString(),
     },
   ]
 
@@ -186,7 +205,10 @@ class MockBlogApi implements BlogApi {
     await wait()
     const existing = this.administrators.find((item) => item.githubId === githubId)
     if (existing) return clone(existing)
-    const added: Administrator = { githubId, isOwner: false, grantedAt: new Date().toISOString() }
+    const added: Administrator = {
+      githubId, login: '', name: '', avatarUrl: '', hasSignedIn: false,
+      isOwner: false, grantedAt: new Date().toISOString(),
+    }
     this.administrators.push(added)
     return clone(added)
   }
@@ -198,12 +220,50 @@ class MockBlogApi implements BlogApi {
     this.administrators.splice(index, 1)
   }
 
-  async listCommentUsers(query = '') {
+  async listCommentUsers(query: CommentUserQuery = {}) {
     await wait()
-    const keyword = query.trim().toLocaleLowerCase()
-    return clone(this.commentUsers.filter((item) =>
+    const keyword = query.q?.trim().toLocaleLowerCase() ?? ''
+    const page = query.page ?? 1
+    const pageSize = query.pageSize ?? 20
+    const items = this.commentUsers.filter((item) =>
       !keyword || `${item.githubId} ${item.login} ${item.name}`.toLocaleLowerCase().includes(keyword),
-    ))
+    )
+    return {
+      items: clone(items.slice((page - 1) * pageSize, page * pageSize)),
+      pagination: {
+        page,
+        pageSize,
+        total: items.length,
+        totalPages: Math.max(1, Math.ceil(items.length / pageSize)),
+      },
+    }
+  }
+
+  async listAuditEvents(query: AuditEventQuery = {}) {
+    await wait()
+    const keyword = query.q?.trim().toLocaleLowerCase() ?? ''
+    const outcome = query.outcome ?? 'all'
+    const page = query.page ?? 1
+    const pageSize = query.pageSize ?? 30
+    const filtered = this.auditEvents.filter((event) => {
+      const matchesOutcome = outcome === 'all' ||
+        (outcome === 'success' ? event.responseStatus >= 200 && event.responseStatus < 400 : event.responseStatus >= 400)
+      const matchesSearch = !keyword ||
+        event.actorLogin.toLocaleLowerCase().includes(keyword) ||
+        event.requestPath.toLocaleLowerCase().includes(keyword) ||
+        event.requestId.toLocaleLowerCase().includes(keyword)
+      return matchesOutcome && matchesSearch
+    })
+    const start = (page - 1) * pageSize
+    return {
+      items: clone(filtered.slice(start, start + pageSize)),
+      pagination: {
+        page,
+        pageSize,
+        total: filtered.length,
+        totalPages: Math.max(1, Math.ceil(filtered.length / pageSize)),
+      },
+    }
   }
 
   async updateCommentPolicy(githubId: number, input: CommentPolicyMutation) {
@@ -233,6 +293,21 @@ class MockBlogApi implements BlogApi {
     }
   }
 
+  async listTrashedPosts(query: Pick<PostQuery, 'page' | 'pageSize'> = {}) {
+    await wait()
+    const page = query.page ?? 1
+    const pageSize = query.pageSize ?? 20
+    return {
+      items: clone(this.trashedPosts.slice((page - 1) * pageSize, page * pageSize)),
+      pagination: {
+        page,
+        pageSize,
+        total: this.trashedPosts.length,
+        totalPages: Math.max(1, Math.ceil(this.trashedPosts.length / pageSize)),
+      },
+    }
+  }
+
   async getAdminPost(id: number) {
     await wait()
     const post = mockPosts.find((item) => item.id === id)
@@ -242,7 +317,7 @@ class MockBlogApi implements BlogApi {
 
   async createPost(input: PostMutation) {
     await wait()
-    if (mockPosts.some((post) => post.slug === input.slug)) {
+    if ([...mockPosts, ...this.trashedPosts].some((post) => post.slug === input.slug)) {
       throw new ApiError(409, 'SLUG_CONFLICT', 'Slug 已被使用', { slug: 'Slug 已被使用' })
     }
     const created = this.fromMutation(Math.max(...mockPosts.map((post) => post.id)) + 1, input)
@@ -259,7 +334,7 @@ class MockBlogApi implements BlogApi {
     if (wasPublished && input.slug !== existing.slug) {
       throw new ApiError(409, 'POST_SLUG_LOCKED', '文章发布后不能修改 Slug')
     }
-    if (mockPosts.some((post) => post.id !== id && post.slug === input.slug)) {
+    if ([...mockPosts, ...this.trashedPosts].some((post) => post.id !== id && post.slug === input.slug)) {
       throw new ApiError(409, 'SLUG_CONFLICT', 'Slug 已被使用', { slug: 'Slug 已被使用' })
     }
     const updated = this.fromMutation(id, input, existing)
@@ -271,7 +346,23 @@ class MockBlogApi implements BlogApi {
     await wait()
     const index = mockPosts.findIndex((post) => post.id === id)
     if (index < 0) throw new ApiError(404, 'POST_NOT_FOUND', '文章不存在')
+    this.trashedPosts.unshift(mockPosts[index]!)
     mockPosts.splice(index, 1)
+  }
+
+  async restorePost(id: number) {
+    await wait()
+    const index = this.trashedPosts.findIndex((post) => post.id === id)
+    if (index < 0) throw new ApiError(404, 'POST_NOT_FOUND', '回收站中不存在该文章')
+    mockPosts.unshift(this.trashedPosts[index]!)
+    this.trashedPosts.splice(index, 1)
+  }
+
+  async deletePostPermanent(id: number) {
+    await wait()
+    const index = this.trashedPosts.findIndex((post) => post.id === id)
+    if (index < 0) throw new ApiError(404, 'POST_NOT_FOUND', '回收站中不存在该文章')
+    this.trashedPosts.splice(index, 1)
   }
 
   async createTag(input: TaxonomyMutation) {
@@ -354,7 +445,10 @@ class MockBlogApi implements BlogApi {
     await wait()
     const page = query.page ?? 1
     const pageSize = query.pageSize ?? 20
-    let items = this.uploads.filter((item) => item.status === (query.status ?? 'active'))
+    const requestedStatus = query.status ?? 'active'
+    let items = this.uploads.filter((item) =>
+      requestedStatus === 'trashed' ? item.status === 'trashed' || item.status === 'deleting' : item.status === 'active',
+    )
     if (query.usage === 'used') items = items.filter((item) => item.usageCount > 0)
     if (query.usage === 'unused') items = items.filter((item) => item.usageCount === 0)
     if (query.q) items = items.filter((item) => item.filename.toLowerCase().includes(query.q!.toLowerCase()))
@@ -363,7 +457,7 @@ class MockBlogApi implements BlogApi {
   async getUpload(id: number) { const item = this.uploads.find((value) => value.id === id); if (!item) throw new ApiError(404, 'UPLOAD_NOT_FOUND', '媒体不存在'); return clone(item) }
   async trashUpload(id: number) { const item = this.uploads.find((value) => value.id === id); if (!item) throw new ApiError(404, 'UPLOAD_NOT_FOUND', '媒体不存在'); if (item.usageCount) throw new ApiError(409, 'UPLOAD_IN_USE', '媒体正在使用'); item.status = 'trashed'; item.trashedAt = new Date().toISOString() }
   async restoreUpload(id: number) { const item = this.uploads.find((value) => value.id === id); if (!item) throw new ApiError(404, 'UPLOAD_NOT_FOUND', '媒体不存在'); item.status = 'active'; item.trashedAt = null; return clone(item) }
-  async deleteUploadPermanent(id: number) { const index = this.uploads.findIndex((value) => value.id === id && value.status === 'trashed'); if (index < 0) throw new ApiError(409, 'UPLOAD_STATE_INVALID', '媒体状态不允许删除'); this.uploads.splice(index, 1) }
+  async deleteUploadPermanent(id: number) { const index = this.uploads.findIndex((value) => value.id === id && (value.status === 'trashed' || value.status === 'deleting')); if (index < 0) throw new ApiError(409, 'UPLOAD_STATE_INVALID', '媒体状态不允许删除'); this.uploads.splice(index, 1) }
 
   async logout() {
     await wait(80)
@@ -402,8 +496,8 @@ class HttpBlogApi implements BlogApi {
     this.request<SiteProfile>('/admin/site/appearance', { method: 'PUT', body: input })
   listPosts = (query: PostQuery = {}) => this.request<Paginated<PostSummary>>(`/posts${this.query(query)}`)
   getPost = (slug: string) => this.request<PostDetail>(`/posts/${encodeURIComponent(slug)}`)
-  listTags = () => this.request<Tag[]>('/tags', { cache: 'no-cache' })
-  listCategories = () => this.request<Category[]>('/categories', { cache: 'no-cache' })
+  listTags = () => this.request<Tag[]>('/tags')
+  listCategories = () => this.request<Category[]>('/categories')
   listAdminTags = () => this.request<Tag[]>('/admin/tags')
   listAdminCategories = () => this.request<Category[]>('/admin/categories')
   async getAuthState() {
@@ -417,17 +511,43 @@ class HttpBlogApi implements BlogApi {
     this.request<Administrator>('/admin/administrators', { method: 'POST', body: { githubId } })
   removeAdministrator = (githubId: number) =>
     this.request<void>(`/admin/administrators/${githubId}`, { method: 'DELETE' })
-  listCommentUsers = (query = '') =>
-    this.request<CommentUser[]>(`/admin/users${query.trim() ? `?q=${encodeURIComponent(query.trim())}` : ''}`)
+  async listCommentUsers(query: CommentUserQuery = {}) {
+    const result = await this.request<Paginated<CommentUser> | CommentUser[]>(
+      `/admin/users${this.query(query)}`,
+    )
+    if (!Array.isArray(result)) return result
+
+    // Compatibility with the previous API, which returned the user array
+    // directly. Remove this branch after all deployments use paginated API.
+    const page = query.page ?? 1
+    const pageSize = query.pageSize ?? 20
+    const start = (page - 1) * pageSize
+    return {
+      items: result.slice(start, start + pageSize),
+      pagination: {
+        page,
+        pageSize,
+        total: result.length,
+        totalPages: Math.max(1, Math.ceil(result.length / pageSize)),
+      },
+    }
+  }
   updateCommentPolicy = (githubId: number, input: CommentPolicyMutation) =>
     this.request<CommentUser>(`/admin/users/${githubId}/comment-policy`, { method: 'PUT', body: input })
+  listAuditEvents = (query: AuditEventQuery = {}) =>
+    this.request<Paginated<AuditEvent>>(`/admin/audit-events${this.query(query)}`)
   listAdminPosts = (query: PostQuery = {}) =>
     this.request<Paginated<PostSummary>>(`/admin/posts${this.query(query)}`)
+  listTrashedPosts = (query: Pick<PostQuery, 'page' | 'pageSize'> = {}) =>
+    this.request<Paginated<PostSummary>>(`/admin/posts/trash${this.query(query)}`)
   getAdminPost = (id: number) => this.request<PostDetail>(`/admin/posts/${id}`)
   createPost = (input: PostMutation) => this.request<PostDetail>('/admin/posts', { method: 'POST', body: input })
   updatePost = (id: number, input: PostMutation) =>
     this.request<PostDetail>(`/admin/posts/${id}`, { method: 'PUT', body: input })
   deletePost = (id: number) => this.request<void>(`/admin/posts/${id}`, { method: 'DELETE' })
+  restorePost = (id: number) => this.request<void>(`/admin/posts/${id}/restore`, { method: 'POST' })
+  deletePostPermanent = (id: number) =>
+    this.request<void>(`/admin/posts/${id}/permanent`, { method: 'DELETE' })
   createTag = (input: TaxonomyMutation) => this.request<Tag>('/admin/tags', { method: 'POST', body: input })
   updateTag = (id: number, input: TaxonomyMutation) =>
     this.request<Tag>(`/admin/tags/${id}`, { method: 'PUT', body: input })
@@ -438,11 +558,8 @@ class HttpBlogApi implements BlogApi {
     this.request<Category>(`/admin/categories/${id}`, { method: 'PUT', body: input })
   deleteCategory = (id: number) => this.request<void>(`/admin/categories/${id}`, { method: 'DELETE' })
   async logout() {
-    try {
-      await this.request<void>('/auth/logout', { method: 'POST' })
-    } finally {
-      this.csrfToken = null
-    }
+    await this.request<void>('/auth/logout', { method: 'POST' })
+    this.csrfToken = null
   }
 
   async upload(file: File) {
@@ -456,7 +573,7 @@ class HttpBlogApi implements BlogApi {
   restoreUpload = (id: number) => this.request<MediaItem>(`/admin/uploads/${id}/restore`, { method: 'POST' })
   deleteUploadPermanent = (id: number) => this.request<void>(`/admin/uploads/${id}/permanent`, { method: 'DELETE' })
 
-  private query(query: PostQuery | MediaQuery) {
+  private query(query: PostQuery | MediaQuery | CommentUserQuery | AuditEventQuery) {
     const params = new URLSearchParams()
     Object.entries(query).forEach(([key, value]) => {
       if (value !== undefined && value !== '') params.set(key, String(value))
@@ -496,7 +613,10 @@ export function isMockApiEnabled(value: string | undefined) {
   return value === 'true'
 }
 
-export const mockApiEnabled = isMockApiEnabled(import.meta.env.VITE_USE_MOCK_API)
+// Keep the environment comparison inline so Vite can replace it with a build
+// constant and Rollup can remove MockBlogApi and its large preview assets from
+// production bundles.
+export const mockApiEnabled = import.meta.env.VITE_USE_MOCK_API === 'true'
 export const api: BlogApi = mockApiEnabled ? new MockBlogApi() : new HttpBlogApi()
 
 export function sanitizeReturnTo(value: unknown, fallback = '/') {

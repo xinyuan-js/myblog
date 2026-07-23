@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/example/myblog/apps/api/internal/audit"
 	"github.com/example/myblog/apps/api/internal/auth"
 	"github.com/example/myblog/apps/api/internal/blog"
 	"github.com/example/myblog/apps/api/internal/config"
@@ -25,6 +26,7 @@ func TestOpenAPIOperationsMatchRegisteredRoutes(t *testing.T) {
 		PublicStore: store,
 		AdminStore:  store,
 		Auth:        auth.NewService(nil, cfg),
+		Audit:       audit.NewService(nil),
 		Uploads:     upload.NewService(nil, nil, cfg),
 	})
 	if err != nil {

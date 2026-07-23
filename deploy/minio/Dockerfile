@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 FROM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS build
 
 # Pin immutable upstream commits. GOTOOLCHAIN=local prevents an older toolchain
@@ -50,7 +50,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -ldflags="-s -w -X github.com/minio/mc/cmd.Version=${MC_VERSION} -X github.com/minio/mc/cmd.CopyrightYear=2025 -X github.com/minio/mc/cmd.ReleaseTag=RELEASE.2025-11-06T16-25-29Z -X github.com/minio/mc/cmd.CommitID=${MC_COMMIT} -X github.com/minio/mc/cmd.ShortCommitID=${MC_SHORT_COMMIT}" \
       -o /go/bin/mc .
 
-FROM alpine:3.24.1
+FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 
 RUN apk upgrade --no-cache \
     && apk add --no-cache ca-certificates tzdata

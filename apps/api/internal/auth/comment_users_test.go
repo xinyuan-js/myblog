@@ -74,3 +74,37 @@ func TestReserveCommentExemptsAdministrators(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestListCommentUsersPaginatesAndEscapesSearch(t *testing.T) {
+	service, mock := newCommentPolicyService(t)
+	service.cfg.GitHubAdminID = 99
+	query := `100%_user`
+	pattern := `%100\%\_user%`
+	now := time.Unix(1_700_000_000, 0).UTC()
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM github_users`).
+		WithArgs(query, pattern, pattern, pattern).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(21))
+	mock.ExpectQuery("SELECT u.github_id").
+		WithArgs(uint64(99), uint64(99), "2023-11-15", query, pattern, pattern, pattern, 20, 20).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"github_id", "github_login", "display_name", "avatar_url", "is_admin", "is_owner",
+			"comments_blocked", "comment_block_reason", "comment_daily_limit", "comment_count",
+			"created_at", "updated_at",
+		}).AddRow(42, "user", "User", "https://example.com/avatar.png", false, false,
+			false, "", nil, 3, now, now))
+
+	result, err := service.ListCommentUsers(context.Background(), query, 2, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Pagination.Page != 2 || result.Pagination.Total != 21 || result.Pagination.TotalPages != 2 {
+		t.Fatalf("unexpected pagination: %+v", result.Pagination)
+	}
+	if len(result.Items) != 1 || result.Items[0].GitHubID != 42 || result.Items[0].EffectiveDailyLimit != 20 {
+		t.Fatalf("unexpected items: %+v", result.Items)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

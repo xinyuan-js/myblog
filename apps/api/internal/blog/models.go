@@ -88,6 +88,7 @@ type AdminPostQuery struct {
 	Page     int
 	PageSize int
 	Status   string
+	Trashed  bool
 }
 
 type PostMutation struct {

@@ -78,7 +78,7 @@ onMounted(load)
 </script>
 
 <template>
-  <header class="admin-page-header"><div><h1>标签与分类</h1><p>保持内容结构简单、稳定且可维护。</p></div></header>
+  <header class="admin-page-header"><div><h1>标签与分类</h1><p>文章数量包含回收站；仍被回收站文章使用的项目不能删除。</p></div></header>
   <div class="taxonomy-admin-grid">
     <section class="card admin-panel taxonomy-panel">
       <h2>标签</h2>
@@ -88,7 +88,7 @@ onMounted(load)
         <div class="admin-actions"><button class="button primary" type="submit">{{ tagForm.id ? '保存修改' : '添加标签' }}</button><button v-if="tagForm.id" class="button" type="button" @click="resetTag">取消</button></div>
       </form>
       <div class="taxonomy-rows">
-        <div v-for="tag in tags" :key="tag.id"><span><strong># {{ tag.name }}</strong><small>{{ tag.slug }} · {{ tag.postCount }} 篇</small></span><span><button type="button" @click="editTag(tag)">编辑</button><button class="delete-link" type="button" @click="removeTag(tag)">删除</button></span></div>
+        <div v-for="tag in tags" :key="tag.id"><span><strong># {{ tag.name }}</strong><small>{{ tag.slug }} · {{ tag.postCount }} 篇（含回收站）</small></span><span><button type="button" @click="editTag(tag)">编辑</button><button class="delete-link" type="button" @click="removeTag(tag)">删除</button></span></div>
       </div>
     </section>
 
@@ -101,7 +101,7 @@ onMounted(load)
         <div class="admin-actions full"><button class="button primary" type="submit">{{ categoryForm.id ? '保存修改' : '添加分类' }}</button><button v-if="categoryForm.id" class="button" type="button" @click="resetCategory">取消</button></div>
       </form>
       <div class="taxonomy-rows">
-        <div v-for="category in categories" :key="category.id"><span><strong>{{ category.name }}</strong><small>{{ category.slug }} · {{ category.postCount }} 篇</small></span><span><button type="button" @click="editCategory(category)">编辑</button><button class="delete-link" type="button" @click="removeCategory(category)">删除</button></span></div>
+        <div v-for="category in categories" :key="category.id"><span><strong>{{ category.name }}</strong><small>{{ category.slug }} · {{ category.postCount }} 篇（含回收站）</small></span><span><button type="button" @click="editCategory(category)">编辑</button><button class="delete-link" type="button" @click="removeCategory(category)">删除</button></span></div>
       </div>
     </section>
   </div>

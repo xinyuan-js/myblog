@@ -14,6 +14,7 @@ const themeMenuOpen = ref(false)
 const accountMenuOpen = ref(false)
 const searchOpen = ref(false)
 const loggingOut = ref(false)
+const logoutError = ref<string | null>(null)
 const { authState, refreshAuth, logout } = useAuth()
 const { scheme, hue, toggleTheme, setTheme, setHue } = useTheme()
 const defaultHue = 250
@@ -43,10 +44,13 @@ async function refreshAuthState() {
 async function logoutCurrentUser() {
   if (loggingOut.value) return
   loggingOut.value = true
+  logoutError.value = null
   try {
     await logout()
     menuOpen.value = false
     accountMenuOpen.value = false
+  } catch (cause) {
+    logoutError.value = cause instanceof Error ? cause.message : '退出失败，请检查网络后重试'
   } finally {
     loggingOut.value = false
   }
@@ -112,6 +116,7 @@ onBeforeUnmount(() => {
             <button type="button" :disabled="loggingOut" @click="logoutCurrentUser">
               <LogOut :size="17" aria-hidden="true" />{{ loggingOut ? '退出中…' : '退出登录' }}
             </button>
+            <p v-if="logoutError" class="account-error" role="alert">{{ logoutError }}</p>
           </div>
         </div>
       </div>
@@ -164,6 +169,7 @@ onBeforeUnmount(() => {
         <button v-if="authState?.authenticated" type="button" :disabled="loggingOut" @click="logoutCurrentUser">
           <LogOut :size="18" aria-hidden="true" />{{ loggingOut ? '退出中…' : '退出登录' }}
         </button>
+        <p v-if="logoutError" class="account-error mobile" role="alert">{{ logoutError }}</p>
       </div>
     </nav>
   </header>
@@ -336,6 +342,8 @@ onBeforeUnmount(() => {
 .mobile-account small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mobile-account strong { color: var(--text-strong); }
 .mobile-account small { color: var(--text-muted); font-size: 0.75rem; }
+.account-error { margin: 0.25rem 0.65rem 0.5rem; color: #b42318; font-size: 0.75rem; line-height: 1.4; }
+.account-error.mobile { padding: 0 0.25rem; }
 
 @media (max-width: 1023px) {
   .theme-menu { display: none; }

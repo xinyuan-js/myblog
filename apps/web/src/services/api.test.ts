@@ -49,6 +49,12 @@ describe('mock blog api', () => {
     expect(result.items.some((post) => post.status === 'draft')).toBe(true)
   })
 
+  it('paginates comment users with the shared response shape', async () => {
+    const result = await api.listCommentUsers({ page: 1, pageSize: 20, q: 'example' })
+    expect(result.pagination).toMatchObject({ page: 1, pageSize: 20, total: 1, totalPages: 1 })
+    expect(result.items[0]?.login).toBe('example-user')
+  })
+
   it('updates the public site appearance', async () => {
     const original = await api.getSiteProfile()
     const updated = await api.updateSiteAppearance({
@@ -124,5 +130,14 @@ describe('mock blog api', () => {
     const publicPosts = await api.listPosts({ pageSize: 100 })
     expect(publicPosts.items.some((post) => post.id === created.id)).toBe(false)
     await api.deletePost(created.id)
+    const trash = await api.listTrashedPosts({ pageSize: 100 })
+    expect(trash.items.some((post) => post.id === created.id)).toBe(true)
+    await api.restorePost(created.id)
+    const restored = await api.listAdminPosts({ pageSize: 100 })
+    expect(restored.items.some((post) => post.id === created.id)).toBe(true)
+    await api.deletePost(created.id)
+    await api.deletePostPermanent(created.id)
+    const emptiedTrash = await api.listTrashedPosts({ pageSize: 100 })
+    expect(emptiedTrash.items.some((post) => post.id === created.id)).toBe(false)
   })
 })

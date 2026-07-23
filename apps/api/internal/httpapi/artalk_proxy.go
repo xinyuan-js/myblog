@@ -40,7 +40,10 @@ func (h artalkProxyHandler) proxy(c *gin.Context) {
 	}
 
 	var reservation auth.CommentReservation
-	if c.Request.Method == http.MethodPost && upstreamPath == "/api/v2/comments" {
+	unsafeMethod := isUnsafeArtalkMethod(c.Request.Method)
+	artalkToken := artalkRequestToken(c.Request)
+	authenticatedRead := !unsafeMethod && artalkToken != ""
+	if unsafeMethod || authenticatedRead {
 		session, ok, err := h.session(c)
 		switch {
 		case err != nil:
@@ -50,18 +53,41 @@ func (h artalkProxyHandler) proxy(c *gin.Context) {
 		case !ok:
 			writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "请先登录后再评论")
 			return
-		case !h.service.ValidOrigin(c.Request):
+		case artalkToken == "":
+			writeError(c, http.StatusUnauthorized, "ARTALK_SESSION_REQUIRED", "评论身份已失效，请刷新页面后重试")
+			return
+		case unsafeMethod && !h.service.ValidOrigin(c.Request):
 			writeError(c, http.StatusForbidden, "ORIGIN_INVALID", "评论请求来源不正确")
 			return
 		}
-		reservation, err = h.service.ReserveComment(c.Request.Context(), session)
-		if err != nil {
-			if writeCommentPolicyError(c, err) {
+		if err := h.service.ValidateArtalkSession(c.Request.Context(), artalkToken, session); err != nil {
+			switch {
+			case errors.Is(err, auth.ErrArtalkSessionInvalid), errors.Is(err, auth.ErrArtalkUserMismatch):
+				writeError(c, http.StatusUnauthorized, "ARTALK_SESSION_INVALID", "评论身份已失效，请刷新页面后重试")
+			default:
+				h.logger.Error("validate Artalk session", "requestId", requestIDFromContext(c), "error", err)
+				writeError(c, http.StatusBadGateway, "COMMENTS_UNAVAILABLE", "评论服务暂时不可用")
+			}
+			return
+		}
+		// Artalk sends its token in the Authorization header for private
+		// notification and moderation reads. Requiring the live blog session
+		// above makes logout invalidate those reads immediately. Anonymous
+		// public reads do not carry this header and remain available.
+		if unsafeMethod {
+			if c.Request.Method == http.MethodPost && upstreamPath == "/api/v2/comments" {
+				reservation, err = h.service.ReserveComment(c.Request.Context(), session)
+			} else {
+				err = h.service.CheckCommentAccess(c.Request.Context(), session)
+			}
+			if err != nil {
+				if writeCommentPolicyError(c, err) {
+					return
+				}
+				h.logger.Error("reserve comment quota", "requestId", requestIDFromContext(c), "error", err)
+				writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "服务器内部错误")
 				return
 			}
-			h.logger.Error("reserve comment quota", "requestId", requestIDFromContext(c), "error", err)
-			writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "服务器内部错误")
-			return
 		}
 	}
 
@@ -93,6 +119,22 @@ func (h artalkProxyHandler) proxy(c *gin.Context) {
 		writeError(c, http.StatusBadGateway, "COMMENTS_UNAVAILABLE", "评论服务暂时不可用")
 	}
 	proxy.ServeHTTP(c.Writer, request)
+}
+
+func isUnsafeArtalkMethod(method string) bool {
+	return method == http.MethodPost || method == http.MethodPut || method == http.MethodDelete
+}
+
+func artalkRequestToken(request *http.Request) string {
+	if token := strings.TrimSpace(request.URL.Query().Get("token")); token != "" {
+		return token
+	}
+	const bearerPrefix = "Bearer "
+	authorization := request.Header.Get("Authorization")
+	if !strings.HasPrefix(authorization, bearerPrefix) {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(authorization, bearerPrefix))
 }
 
 func (h artalkProxyHandler) session(c *gin.Context) (auth.Session, bool, error) {
@@ -128,6 +170,8 @@ func writeCommentPolicyError(c *gin.Context, err error) bool {
 		writeError(c, http.StatusTooManyRequests, "COMMENT_DAILY_LIMIT", "今天的评论额度已用完，请明天再试")
 	case errors.Is(err, auth.ErrCommentUserMissing):
 		writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "请重新登录后再评论")
+	case errors.Is(err, auth.ErrArtalkIdentityConflict):
+		writeError(c, http.StatusConflict, "COMMENT_IDENTITY_CONFLICT", "评论身份邮箱已被其他账号占用，请联系站点管理员")
 	default:
 		return false
 	}

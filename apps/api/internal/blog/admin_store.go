@@ -18,7 +18,7 @@ import (
 
 func (s *Store) AdminTags(ctx context.Context) ([]Tag, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT t.id, t.name, t.slug, COUNT(DISTINCT CASE WHEN p.deleted_at IS NULL THEN p.id END)
+		SELECT t.id, t.name, t.slug, COUNT(DISTINCT p.id)
 		FROM tags t LEFT JOIN post_tags pt ON pt.tag_id = t.id LEFT JOIN posts p ON p.id = pt.post_id
 		GROUP BY t.id, t.name, t.slug ORDER BY t.name ASC
 	`)
@@ -39,7 +39,7 @@ func (s *Store) AdminTags(ctx context.Context) ([]Tag, error) {
 
 func (s *Store) AdminCategories(ctx context.Context) ([]Category, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT c.id, c.name, c.slug, c.description, COUNT(DISTINCT CASE WHEN p.deleted_at IS NULL THEN p.id END)
+		SELECT c.id, c.name, c.slug, c.description, COUNT(DISTINCT p.id)
 		FROM categories c LEFT JOIN posts p ON p.category_id = c.id
 		GROUP BY c.id, c.name, c.slug, c.description ORDER BY c.name ASC
 	`)
@@ -62,13 +62,17 @@ func (s *Store) AdminCategories(ctx context.Context) ([]Category, error) {
 
 func (s *Store) ListAdminPosts(ctx context.Context, query AdminPostQuery) (PostPage, error) {
 	condition := "p.deleted_at IS NULL"
-	switch query.Status {
-	case "draft":
-		condition += " AND p.status = 'draft'"
-	case "published":
-		condition += " AND p.status = 'published' AND p.published_at <= UTC_TIMESTAMP(6)"
-	case "scheduled":
-		condition += " AND p.status = 'published' AND p.published_at > UTC_TIMESTAMP(6)"
+	if query.Trashed {
+		condition = "p.deleted_at IS NOT NULL"
+	} else {
+		switch query.Status {
+		case "draft":
+			condition += " AND p.status = 'draft'"
+		case "published":
+			condition += " AND p.status = 'published' AND p.published_at <= UTC_TIMESTAMP(6)"
+		case "scheduled":
+			condition += " AND p.status = 'published' AND p.published_at > UTC_TIMESTAMP(6)"
+		}
 	}
 	var total int64
 	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM posts p WHERE "+condition).Scan(&total); err != nil {
@@ -218,29 +222,47 @@ func (s *Store) UpdatePost(ctx context.Context, id int64, mutation PostMutation,
 }
 
 func (s *Store) DeletePost(ctx context.Context, id int64) error {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `UPDATE posts SET deleted_at=UTC_TIMESTAMP(6),category_id=NULL WHERE id=? AND deleted_at IS NULL`, id)
+	result, err := s.db.ExecContext(ctx, `UPDATE posts SET deleted_at=UTC_TIMESTAMP(6) WHERE id=? AND deleted_at IS NULL`, id)
 	if err != nil {
 		return fmt.Errorf("soft delete post: %w", err)
 	}
 	if affected, _ := result.RowsAffected(); affected == 0 {
 		return ErrNotFound
 	}
-	// Deleted posts are not restorable in V1, so release taxonomy references as
-	// part of the same transaction. Keeping them would make a tag undeletable
-	// forever and would make category deletion fail its foreign key after the
-	// visible post had already disappeared.
-	if _, err := tx.ExecContext(ctx, `DELETE FROM post_tags WHERE post_id=?`, id); err != nil {
-		return err
+	return nil
+}
+
+func (s *Store) RestorePost(ctx context.Context, id int64) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE posts SET deleted_at=NULL WHERE id=? AND deleted_at IS NOT NULL`, id)
+	if err != nil {
+		return fmt.Errorf("restore post: %w", err)
 	}
+	if affected, _ := result.RowsAffected(); affected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) DeletePostPermanent(ctx context.Context, id int64) error {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin permanent post delete: %w", err)
+	}
+	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `DELETE FROM upload_references WHERE resource_type IN ('post_cover','post_content') AND resource_id=?`, id); err != nil {
-		return err
+		return fmt.Errorf("release post media references: %w", err)
 	}
-	return tx.Commit()
+	result, err := tx.ExecContext(ctx, `DELETE FROM posts WHERE id=? AND deleted_at IS NOT NULL`, id)
+	if err != nil {
+		return fmt.Errorf("permanent delete post: %w", err)
+	}
+	if affected, _ := result.RowsAffected(); affected == 0 {
+		return ErrNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit permanent post delete: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) UpdateSiteAppearance(ctx context.Context, mutation SiteAppearanceMutation) (SiteProfile, error) {
@@ -375,7 +397,7 @@ func (s *Store) UpdateCategory(ctx context.Context, id int64, mutation TaxonomyM
 
 func (s *Store) DeleteCategory(ctx context.Context, id int64) error {
 	var count int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM posts WHERE category_id=? AND deleted_at IS NULL`, id).Scan(&count); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM posts WHERE category_id=?`, id).Scan(&count); err != nil {
 		return err
 	}
 	if count > 0 {

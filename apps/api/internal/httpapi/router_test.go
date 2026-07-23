@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/gin-gonic/gin"
 	"github.com/example/myblog/apps/api/internal/auth"
 	"github.com/example/myblog/apps/api/internal/config"
+	"github.com/gin-gonic/gin"
 )
 
 func newTestRouter(t *testing.T) *gin.Engine {
@@ -70,14 +70,14 @@ func TestAdminMiddlewareRequiresSessionAndCSRF(t *testing.T) {
 				if storedID == 0 {
 					storedID = 12345678
 				}
-				rows := sqlmock.NewRows([]string{"github_id", "github_login", "display_name", "email", "avatar_url", "csrf_token_hash"}).
-					AddRow(storedID, "user", "User", "user@example.com", "https://example.com/avatar.png", csrfHash[:])
-				mock.ExpectQuery("SELECT github_id").WithArgs(tokenHash[:]).WillReturnRows(rows)
+				rows := sqlmock.NewRows([]string{
+					"github_id", "github_login", "display_name", "email", "avatar_url", "csrf_token_hash", "refresh_last_seen",
+				}).AddRow(storedID, "user", "User", "user@example.com", "https://example.com/avatar.png", csrfHash[:], false)
+				mock.ExpectQuery("SELECT session.github_id").WithArgs(tokenHash[:]).WillReturnRows(rows)
 				if storedID != 12345678 {
 					mock.ExpectQuery("SELECT EXISTS").WithArgs(storedID).
 						WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 				}
-				mock.ExpectExec("UPDATE user_sessions SET last_seen_at").WithArgs(tokenHash[:]).WillReturnResult(sqlmock.NewResult(0, 1))
 			}
 
 			router := gin.New()
@@ -152,6 +152,28 @@ func TestRateLimiterBoundsClientState(t *testing.T) {
 	}
 }
 
+func TestOAuthCallbackCannotBeStarvedBySharedIPRateLimit(t *testing.T) {
+	cfg := config.Config{Environment: config.Test, TrustedProxies: nil}
+	service := auth.NewService(nil, config.Config{
+		AppOrigin: "https://blog.example.com", SessionCookieName: "blog_session",
+	})
+	router, err := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{Auth: service})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 64; index++ {
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(
+			http.MethodGet, "/api/auth/github/callback?error=access_denied", nil,
+		)
+		request.RemoteAddr = "192.0.2.10:12345"
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusFound {
+			t.Fatalf("callback %d status = %d, want %d", index+1, response.Code, http.StatusFound)
+		}
+	}
+}
+
 func TestHealthEndpoints(t *testing.T) {
 	for _, path := range []string{"/api/healthz", "/api/readyz"} {
 		t.Run(path, func(t *testing.T) {
@@ -186,6 +208,83 @@ func TestUnknownRouteUsesStableErrorContract(t *testing.T) {
 	}
 	if payload.Code != "ROUTE_NOT_FOUND" || payload.RequestID == "" {
 		t.Fatalf("unexpected payload: %+v", payload)
+	}
+}
+
+func TestArtalkProxyRejectsUnsupportedMethods(t *testing.T) {
+	cfg := config.Config{
+		Environment:       config.Test,
+		SessionCookieName: "blog_session",
+		ArtalkInternalURL: "http://127.0.0.1:23366",
+	}
+	router, err := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Auth: auth.NewService(nil, cfg),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []string{http.MethodConnect, http.MethodPatch, http.MethodTrace} {
+		t.Run(method, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(method, "/internal/artalk/api/v2/conf", nil)
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusMethodNotAllowed {
+				t.Fatalf("status = %d, want %d, body = %s", response.Code, http.StatusMethodNotAllowed, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestArtalkProxyRequiresBlogSessionForEveryMutation(t *testing.T) {
+	cfg := config.Config{
+		Environment:       config.Test,
+		SessionCookieName: "blog_session",
+		ArtalkInternalURL: "http://127.0.0.1:23366",
+	}
+	router, err := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Auth: auth.NewService(nil, cfg),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodPost, path: "/internal/artalk/api/v2/comments"},
+		{method: http.MethodPost, path: "/internal/artalk/api/v2/votes/comment/1/up"},
+		{method: http.MethodPut, path: "/internal/artalk/api/v2/comments/1"},
+		{method: http.MethodDelete, path: "/internal/artalk/api/v2/comments/1"},
+	} {
+		t.Run(test.method+" "+test.path, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(test.method, test.path, nil)
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want %d, body = %s", response.Code, http.StatusUnauthorized, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestArtalkProxyRequiresBlogSessionForAuthenticatedReads(t *testing.T) {
+	cfg := config.Config{
+		Environment:       config.Test,
+		SessionCookieName: "blog_session",
+		ArtalkInternalURL: "http://127.0.0.1:23366",
+	}
+	router, err := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Auth: auth.NewService(nil, cfg),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/internal/artalk/api/v2/notifies", nil)
+	request.Header.Set("Authorization", "Bearer stale-artalk-token")
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d, body = %s", response.Code, http.StatusUnauthorized, response.Body.String())
 	}
 }
 

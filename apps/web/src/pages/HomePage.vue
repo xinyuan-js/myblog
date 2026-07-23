@@ -17,7 +17,7 @@ const error = ref<string | null>(null)
 const page = computed(() => parsePageQuery(route.query.page))
 let requestId = 0
 
-useDocumentMeta('', '记录工程实践、阅读笔记和生活里值得停留的瞬间。')
+useDocumentMeta('')
 
 async function load() {
   const currentRequest = ++requestId

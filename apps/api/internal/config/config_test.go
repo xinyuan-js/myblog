@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -32,6 +33,8 @@ func TestLoadParsesOverrides(t *testing.T) {
 	t.Setenv("TRUSTED_PROXIES", "127.0.0.1, 10.0.0.0/8")
 	t.Setenv("DATABASE_MAX_OPEN", "20")
 	t.Setenv("DATABASE_MAX_IDLE", "8")
+	t.Setenv("DATABASE_DSN", "blog:"+strings.Repeat("b", 32)+"@tcp(mysql:3306)/blog?parseTime=true&loc=UTC&multiStatements=true&timeout=5s&readTimeout=10s&writeTimeout=10s")
+	t.Setenv("ARTALK_DATABASE_DSN", "bridge:"+strings.Repeat("a", 32)+"@tcp(mysql:3306)/artalk?parseTime=true&loc=UTC&timeout=5s&readTimeout=10s&writeTimeout=10s")
 	t.Setenv("APP_ORIGIN", "https://blog.example.com")
 	t.Setenv("GITHUB_CALLBACK_URL", "https://blog.example.com/api/auth/github/callback")
 	t.Setenv("GITHUB_CLIENT_ID", "client-id")
@@ -61,13 +64,15 @@ func TestValidateRejectsUnsafeURLAndCredentialConfiguration(t *testing.T) {
 	valid := Config{
 		Environment: Production, HTTPAddr: ":8080", ReadHeaderTimeout: time.Second, ReadTimeout: time.Second,
 		WriteTimeout: time.Second, IdleTimeout: time.Second, ShutdownTimeout: time.Second,
-		DatabaseDSN: "dsn", DatabaseMaxOpen: 1, DatabaseMaxIdle: 1, DatabaseMaxLife: time.Minute,
+		DatabaseDSN:     "blog:" + strings.Repeat("b", 32) + "@tcp(mysql:3306)/blog?parseTime=true&loc=UTC&multiStatements=true&timeout=5s&readTimeout=10s&writeTimeout=10s",
+		DatabaseMaxOpen: 1, DatabaseMaxIdle: 1, DatabaseMaxLife: time.Minute,
 		AppOrigin: "https://blog.example.com", GitHubClientID: "id", GitHubClientSecret: "secret", GitHubAdminID: 1,
 		GitHubCallbackURL: "https://blog.example.com/api/auth/github/callback", OAuthStateSecret: "0123456789abcdef0123456789abcdef",
 		SessionCookieName: "blog_session", SessionSecure: true, SessionTTL: time.Hour,
 		CommentDailyLimit: 20, CommentDayOffset: 8,
-		ArtalkDatabaseDSN: "artalk-dsn", ArtalkInternalURL: "http://artalk:23366",
-		MinIOEndpoint: "minio:9000", MinIOAccessKey: "access", MinIOSecretKey: "0123456789abcdef0123456789abcdef",
+		ArtalkDatabaseDSN: "bridge:" + strings.Repeat("a", 32) + "@tcp(mysql:3306)/artalk?parseTime=true&loc=UTC&timeout=5s&readTimeout=10s&writeTimeout=10s",
+		ArtalkInternalURL: "http://artalk:23366",
+		MinIOEndpoint:     "minio:9000", MinIOAccessKey: "access", MinIOSecretKey: "0123456789abcdef0123456789abcdef",
 		MinIOBucket: "blog-media", MediaPublicURL: "/uploads",
 	}
 	tests := []struct {
@@ -80,6 +85,21 @@ func TestValidateRejectsUnsafeURLAndCredentialConfiguration(t *testing.T) {
 		{name: "cookie injection", mutate: func(c *Config) { c.SessionCookieName = "session; evil" }},
 		{name: "invalid Artalk URL", mutate: func(c *Config) { c.ArtalkInternalURL = "file:///tmp/artalk" }},
 		{name: "invalid MinIO endpoint", mutate: func(c *Config) { c.MinIOEndpoint = "minio:not-a-port" }},
+		{name: "weak blog database password", mutate: func(c *Config) {
+			c.DatabaseDSN = "blog:short@tcp(mysql:3306)/blog?parseTime=true&loc=UTC&multiStatements=true"
+		}},
+		{name: "blog database without multi statements", mutate: func(c *Config) {
+			c.DatabaseDSN = "blog:" + strings.Repeat("b", 32) + "@tcp(mysql:3306)/blog?parseTime=true&loc=UTC&timeout=5s&readTimeout=10s&writeTimeout=10s"
+		}},
+		{name: "Artalk database without parsed time", mutate: func(c *Config) {
+			c.ArtalkDatabaseDSN = "bridge:" + strings.Repeat("a", 32) + "@tcp(mysql:3306)/artalk?loc=UTC&timeout=5s&readTimeout=10s&writeTimeout=10s"
+		}},
+		{name: "blog database without network timeouts", mutate: func(c *Config) {
+			c.DatabaseDSN = "blog:" + strings.Repeat("b", 32) + "@tcp(mysql:3306)/blog?parseTime=true&loc=UTC&multiStatements=true"
+		}},
+		{name: "Artalk database without network timeouts", mutate: func(c *Config) {
+			c.ArtalkDatabaseDSN = "bridge:" + strings.Repeat("a", 32) + "@tcp(mysql:3306)/artalk?parseTime=true&loc=UTC"
+		}},
 		{name: "short MinIO secret", mutate: func(c *Config) { c.MinIOSecretKey = "short" }},
 		{name: "placeholder OAuth secret", mutate: func(c *Config) { c.OAuthStateSecret = "replace-with-at-least-32-random-characters" }},
 		{name: "placeholder MinIO access", mutate: func(c *Config) { c.MinIOAccessKey = "replace-with-random-minio-access" }},

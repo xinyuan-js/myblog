@@ -47,6 +47,20 @@ func newRateLimiter(limit int, window time.Duration) gin.HandlerFunc {
 	}
 }
 
+func newConcurrencyLimiter(limit int) gin.HandlerFunc {
+	slots := make(chan struct{}, limit)
+	return func(c *gin.Context) {
+		select {
+		case slots <- struct{}{}:
+			defer func() { <-slots }()
+			c.Next()
+		default:
+			c.Header("Retry-After", "1")
+			writeError(c, http.StatusTooManyRequests, "SERVER_BUSY", "服务器正在处理其他上传，请稍后重试")
+		}
+	}
+}
+
 func (limiter *fixedWindowLimiter) record(now time.Time, key string) (blocked bool, retry int) {
 	limiter.mu.Lock()
 	defer limiter.mu.Unlock()

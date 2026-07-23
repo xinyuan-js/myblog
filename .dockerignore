@@ -1,8 +1,15 @@
 .git
 .cache
+**/.cache
 data
+backups
 apps/api/.cache
 apps/web/node_modules
 apps/web/dist
+**/node_modules
+**/dist
+**/coverage
 *.log
 .env
+**/.env
+**/.env.*

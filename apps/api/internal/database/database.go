@@ -11,8 +11,8 @@ import (
 	"sort"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
 	"github.com/example/myblog/apps/api/internal/config"
+	_ "github.com/go-sql-driver/mysql"
 )
 
 //go:embed migrations/*.sql
@@ -50,7 +50,11 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	if acquired != 1 {
 		return errors.New("acquire migration lock: timed out")
 	}
-	defer conn.ExecContext(context.Background(), `SELECT RELEASE_LOCK('myblog_schema_migrations')`)
+	defer func() {
+		releaseContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = conn.ExecContext(releaseContext, `SELECT RELEASE_LOCK('myblog_schema_migrations')`)
+	}()
 
 	if _, err := conn.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -60,6 +64,43 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 	`); err != nil {
 		return fmt.Errorf("create migration table: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migration_attempts (
+			version VARCHAR(255) PRIMARY KEY,
+			checksum BINARY(32) NOT NULL,
+			started_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`); err != nil {
+		return fmt.Errorf("create migration attempt table: %w", err)
+	}
+	// If the process stopped after recording a completed migration but before
+	// deleting its attempt marker, the matching checksum proves it is safe to
+	// clean up. Every other marker may represent partially committed MySQL DDL
+	// and must stop startup instead of blindly re-running non-transactional SQL.
+	if _, err := conn.ExecContext(ctx, `
+		DELETE attempt
+		FROM schema_migration_attempts AS attempt
+		INNER JOIN schema_migrations AS applied
+			ON applied.version = attempt.version AND applied.checksum = attempt.checksum
+	`); err != nil {
+		return fmt.Errorf("clean completed migration attempts: %w", err)
+	}
+	var incompleteVersion string
+	err = conn.QueryRowContext(ctx, `
+		SELECT version
+		FROM schema_migration_attempts
+		ORDER BY started_at ASC, version ASC
+		LIMIT 1
+	`).Scan(&incompleteVersion)
+	if err == nil {
+		return fmt.Errorf(
+			"migration %s may be partially applied; restore the pre-upgrade backup or inspect the schema before clearing its attempt marker",
+			incompleteVersion,
+		)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("check incomplete migration attempts: %w", err)
 	}
 
 	entries, err := fs.ReadDir(migrationFiles, "migrations")
@@ -88,12 +129,34 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("check migration %s: %w", entry.Name(), err)
 		}
 
-		if _, err := conn.ExecContext(ctx, string(body)); err != nil {
-			return fmt.Errorf("apply migration %s: %w", entry.Name(), err)
-		}
 		if _, err := conn.ExecContext(ctx,
+			`INSERT INTO schema_migration_attempts (version, checksum) VALUES (?, ?)`,
+			entry.Name(), checksum[:],
+		); err != nil {
+			return fmt.Errorf("record migration %s attempt: %w", entry.Name(), err)
+		}
+		if _, err := conn.ExecContext(ctx, string(body)); err != nil {
+			return fmt.Errorf(
+				"apply migration %s: %w; the attempt marker was retained because MySQL DDL may have partially committed",
+				entry.Name(), err,
+			)
+		}
+		recordTx, err := conn.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin recording migration %s: %w", entry.Name(), err)
+		}
+		if _, err := recordTx.ExecContext(ctx,
 			`INSERT INTO schema_migrations (version, checksum) VALUES (?, ?)`, entry.Name(), checksum[:]); err != nil {
+			_ = recordTx.Rollback()
 			return fmt.Errorf("record migration %s: %w", entry.Name(), err)
+		}
+		if _, err := recordTx.ExecContext(ctx,
+			`DELETE FROM schema_migration_attempts WHERE version = ?`, entry.Name()); err != nil {
+			_ = recordTx.Rollback()
+			return fmt.Errorf("clear migration %s attempt: %w", entry.Name(), err)
+		}
+		if err := recordTx.Commit(); err != nil {
+			return fmt.Errorf("commit migration %s record: %w", entry.Name(), err)
 		}
 	}
 	return nil

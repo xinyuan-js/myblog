@@ -1,15 +1,17 @@
 package httpapi
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
-	"github.com/gin-gonic/gin"
 	"github.com/example/myblog/apps/api/internal/upload"
+	"github.com/gin-gonic/gin"
 )
 
 type uploadHandler struct {
@@ -17,24 +19,27 @@ type uploadHandler struct {
 	logger  *slog.Logger
 }
 
+const maxConcurrentUploads = 2
+
+var errInvalidUploadForm = errors.New("invalid upload multipart form")
+
 func (h uploadHandler) create(c *gin.Context) {
 	session, ok := adminSession(c)
 	if !ok {
 		writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "请先登录管理端")
 		return
 	}
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, upload.MaxSize+(1<<20))
-	header, err := c.FormFile("file")
+	input, err := decodeUploadInput(c, upload.MaxSize)
 	if err != nil {
 		var maxBytesError *http.MaxBytesError
-		if errors.As(err, &maxBytesError) {
+		if errors.As(err, &maxBytesError) || errors.Is(err, upload.ErrTooLarge) {
 			writeError(c, http.StatusRequestEntityTooLarge, "UPLOAD_TOO_LARGE", "图片不能超过 10 MiB")
 		} else {
-			writeError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "缺少上传文件")
+			writeError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "上传请求必须且只能包含一个 file 文件")
 		}
 		return
 	}
-	item, err := h.service.Create(c.Request.Context(), header, session.User.GitHubID)
+	item, err := h.service.Create(c.Request.Context(), input, session.User.GitHubID)
 	if h.writeUploadError(c, err) {
 		return
 	}
@@ -42,8 +47,63 @@ func (h uploadHandler) create(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"data": item})
 }
 
+func decodeUploadInput(c *gin.Context, maximum int64) (upload.Input, error) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maximum+(1<<20))
+	reader, err := c.Request.MultipartReader()
+	if err != nil {
+		return upload.Input{}, errInvalidUploadForm
+	}
+	part, err := reader.NextPart()
+	if err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			return upload.Input{}, err
+		}
+		return upload.Input{}, errInvalidUploadForm
+	}
+	if part.FormName() != "file" || part.FileName() == "" {
+		_ = part.Close()
+		return upload.Input{}, errInvalidUploadForm
+	}
+	filename := part.FileName()
+	declaredContentType := part.Header.Get("Content-Type")
+
+	var body bytes.Buffer
+	if expected := c.Request.ContentLength; expected > 0 {
+		if expected > maximum+1 {
+			expected = maximum + 1
+		}
+		body.Grow(int(expected))
+	}
+	_, readError := io.Copy(&body, io.LimitReader(part, maximum+1))
+	closeError := part.Close()
+	if readError != nil {
+		return upload.Input{}, readError
+	}
+	if closeError != nil {
+		return upload.Input{}, closeError
+	}
+	if int64(body.Len()) > maximum {
+		return upload.Input{}, upload.ErrTooLarge
+	}
+
+	extra, err := reader.NextPart()
+	if err == nil {
+		_ = extra.Close()
+		return upload.Input{}, errInvalidUploadForm
+	}
+	if !errors.Is(err, io.EOF) {
+		return upload.Input{}, err
+	}
+	return upload.Input{
+		Filename:            filename,
+		DeclaredContentType: declaredContentType,
+		Body:                body.Bytes(),
+	}, nil
+}
+
 func (h uploadHandler) list(c *gin.Context) {
-	page, ok := positiveQueryInt(c, "page", 1, 1_000_000)
+	page, ok := positiveQueryInt(c, "page", 1, 1_000)
 	if !ok {
 		return
 	}
@@ -74,6 +134,10 @@ func (h uploadHandler) get(c *gin.Context) {
 	}
 	item, err := h.service.Get(c.Request.Context(), id)
 	if h.writeUploadError(c, err) {
+		return
+	}
+	if item.Status == "uploading" {
+		writeError(c, http.StatusNotFound, "UPLOAD_NOT_FOUND", "媒体不存在")
 		return
 	}
 	c.Header("Cache-Control", "no-store")

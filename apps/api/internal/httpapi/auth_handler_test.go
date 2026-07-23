@@ -11,9 +11,9 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/gin-gonic/gin"
 	"github.com/example/myblog/apps/api/internal/auth"
 	"github.com/example/myblog/apps/api/internal/config"
+	"github.com/gin-gonic/gin"
 )
 
 func TestFailedOAuthClearsStateAndSessionCookies(t *testing.T) {
@@ -73,10 +73,10 @@ func TestLogoutOnlyClearsCookieAfterCSRFValidation(t *testing.T) {
 				SessionCookieName: "blog_session", SessionSecure: true,
 				GitHubAdminID: 123, OAuthStateSecret: secret,
 			})
-			rows := sqlmock.NewRows([]string{"github_id", "github_login", "display_name", "email", "avatar_url", "csrf_token_hash"}).
-				AddRow(123, "user", "User", "user@example.com", "https://example.com/avatar.png", csrfHash[:])
-			mock.ExpectQuery("SELECT github_id").WithArgs(tokenHash[:]).WillReturnRows(rows)
-			mock.ExpectExec("UPDATE user_sessions SET last_seen_at").WithArgs(tokenHash[:]).WillReturnResult(sqlmock.NewResult(0, 1))
+			rows := sqlmock.NewRows([]string{
+				"github_id", "github_login", "display_name", "email", "avatar_url", "csrf_token_hash", "refresh_last_seen",
+			}).AddRow(123, "user", "User", "user@example.com", "https://example.com/avatar.png", csrfHash[:], false)
+			mock.ExpectQuery("SELECT session.github_id").WithArgs(tokenHash[:]).WillReturnRows(rows)
 			if test.wantCleared {
 				mock.ExpectExec("DELETE FROM user_sessions").WithArgs(tokenHash[:]).WillReturnResult(sqlmock.NewResult(0, 1))
 			}

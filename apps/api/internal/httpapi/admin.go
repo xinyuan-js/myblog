@@ -28,6 +28,8 @@ type adminStore interface {
 	CreatePost(context.Context, blog.PostMutation, uint) (blog.PostDetail, error)
 	UpdatePost(context.Context, int64, blog.PostMutation, uint) (blog.PostDetail, error)
 	DeletePost(context.Context, int64) error
+	RestorePost(context.Context, int64) error
+	DeletePostPermanent(context.Context, int64) error
 	AdminTags(context.Context) ([]blog.Tag, error)
 	AdminCategories(context.Context) ([]blog.Category, error)
 	CreateTag(context.Context, blog.TaxonomyMutation) (blog.Tag, error)
@@ -45,7 +47,15 @@ type adminHandler struct {
 }
 
 func (h adminHandler) posts(c *gin.Context) {
-	page, ok := positiveQueryInt(c, "page", 1, 1_000_000)
+	h.listPosts(c, false)
+}
+
+func (h adminHandler) trashedPosts(c *gin.Context) {
+	h.listPosts(c, true)
+}
+
+func (h adminHandler) listPosts(c *gin.Context, trashed bool) {
+	page, ok := positiveQueryInt(c, "page", 1, 1_000)
 	if !ok {
 		return
 	}
@@ -54,11 +64,17 @@ func (h adminHandler) posts(c *gin.Context) {
 		return
 	}
 	status := strings.TrimSpace(c.Query("status"))
+	if trashed && status != "" {
+		writeError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "回收站不支持 status 参数")
+		return
+	}
 	if status != "" && status != "draft" && status != "published" && status != "scheduled" {
 		writeError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "status 参数不正确")
 		return
 	}
-	pageResult, err := h.store.ListAdminPosts(c.Request.Context(), blog.AdminPostQuery{Page: page, PageSize: pageSize, Status: status})
+	pageResult, err := h.store.ListAdminPosts(c.Request.Context(), blog.AdminPostQuery{
+		Page: page, PageSize: pageSize, Status: status, Trashed: trashed,
+	})
 	if err != nil {
 		h.internalError(c, "list admin posts", err)
 		return
@@ -134,6 +150,36 @@ func (h adminHandler) deletePost(c *gin.Context) {
 	}
 	if err != nil {
 		h.internalError(c, "delete post", err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (h adminHandler) restorePost(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	if err := h.store.RestorePost(c.Request.Context(), id); errors.Is(err, blog.ErrNotFound) {
+		writeError(c, http.StatusNotFound, "POST_NOT_FOUND", "回收站中不存在该文章")
+		return
+	} else if err != nil {
+		h.internalError(c, "restore post", err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (h adminHandler) deletePostPermanent(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	if err := h.store.DeletePostPermanent(c.Request.Context(), id); errors.Is(err, blog.ErrNotFound) {
+		writeError(c, http.StatusNotFound, "POST_NOT_FOUND", "回收站中不存在该文章")
+		return
+	} else if err != nil {
+		h.internalError(c, "permanent delete post", err)
 		return
 	}
 	c.Status(http.StatusNoContent)
@@ -253,7 +299,7 @@ func (h adminHandler) deleteCategory(c *gin.Context) {
 
 func (h adminHandler) updateSiteAppearance(c *gin.Context) {
 	var mutation blog.SiteAppearanceMutation
-	if !decodeJSONBody(c, &mutation, 1<<20) {
+	if !decodeJSONBody(c, &mutation, 2<<20) {
 		return
 	}
 	mutation.Title = strings.TrimSpace(mutation.Title)
@@ -399,7 +445,7 @@ func (h adminHandler) internalError(c *gin.Context, operation string, err error)
 
 func decodePostMutation(c *gin.Context) (blog.PostMutation, map[string]string, bool) {
 	var value blog.PostMutation
-	if !decodeJSONBody(c, &value, 2<<20) {
+	if !decodeJSONBody(c, &value, 3<<20) {
 		return value, nil, false
 	}
 	value.Title, value.Slug, value.Excerpt = strings.TrimSpace(value.Title), strings.TrimSpace(value.Slug), strings.TrimSpace(value.Excerpt)
@@ -469,10 +515,20 @@ func decodeJSONBody(c *gin.Context, destination any, maximum int64) bool {
 	decoder := json.NewDecoder(c.Request.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
+		var maximumError *http.MaxBytesError
+		if errors.As(err, &maximumError) {
+			writeError(c, http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE", "请求体过大")
+			return false
+		}
 		writeError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "JSON 请求体格式不正确")
 		return false
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		var maximumError *http.MaxBytesError
+		if errors.As(err, &maximumError) {
+			writeError(c, http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE", "请求体过大")
+			return false
+		}
 		writeError(c, http.StatusBadRequest, "INVALID_ARGUMENT", "请求体只能包含一个 JSON 对象")
 		return false
 	}
