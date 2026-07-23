@@ -1,7 +1,11 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
-FROM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS gosu-build
+FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS gosu-build
 
 ARG GOSU_COMMIT=6456aaa0f3c854d199d0f037f068eb97515b7513
+ARG GOPROXY=https://proxy.golang.org,direct
+ARG TARGETOS
+ARG TARGETARCH
+ENV GOPROXY=${GOPROXY}
 RUN apk add --no-cache curl tar
 RUN curl --fail --location --retry 8 --retry-all-errors --proto '=https' --tlsv1.2 \
       "https://codeload.github.com/tianon/gosu/tar.gz/${GOSU_COMMIT}" \
@@ -11,7 +15,8 @@ RUN curl --fail --location --retry 8 --retry-all-errors --proto '=https' --tlsv1
 WORKDIR /src/gosu
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=1.19" -o /go/bin/gosu .
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w -X main.version=1.19" -o /go/bin/gosu .
 
 # MySQL 8.4.10 LTS. The official image also bundles MySQL Shell and its Python
 # environment even though the server entrypoint does not use them. Remove that

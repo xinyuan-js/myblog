@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
-FROM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS build
 
 # Pin immutable upstream commits. GOTOOLCHAIN=local prevents an older toolchain
 # directive in either upstream module from downgrading the patched Go compiler.
@@ -9,7 +9,10 @@ ARG MINIO_VERSION=2025-10-15T17:29:55Z
 ARG MC_COMMIT=77f82e18b5401a65958f1619df6ebb994634bd88
 ARG MC_SHORT_COMMIT=77f82e18b540
 ARG MC_VERSION=2025-11-06T16:25:29Z
-ENV CGO_ENABLED=0 GOTOOLCHAIN=local
+ARG GOPROXY=https://proxy.golang.org,direct
+ARG TARGETOS
+ARG TARGETARCH
+ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOPROXY=${GOPROXY}
 
 RUN apk add --no-cache curl tar
 
@@ -37,7 +40,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       golang.org/x/crypto@v0.52.0 \
       golang.org/x/net@v0.55.0 \
       google.golang.org/grpc@v1.82.1 \
-    && go build -mod=mod -tags kqueue -trimpath \
+    && GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=mod -tags kqueue -trimpath \
       -ldflags="-s -w -X github.com/minio/minio/cmd.Version=${MINIO_VERSION} -X github.com/minio/minio/cmd.CopyrightYear=2025 -X github.com/minio/minio/cmd.ReleaseTag=RELEASE.2025-10-15T17-29-55Z -X github.com/minio/minio/cmd.CommitID=${MINIO_COMMIT} -X github.com/minio/minio/cmd.ShortCommitID=${MINIO_SHORT_COMMIT}" \
       -o /go/bin/minio . \
     && cd /src/mc \
@@ -46,7 +49,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       golang.org/x/crypto@v0.52.0 \
       golang.org/x/net@v0.55.0 \
       google.golang.org/grpc@v1.82.1 \
-    && go build -mod=mod -trimpath \
+    && GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=mod -trimpath \
       -ldflags="-s -w -X github.com/minio/mc/cmd.Version=${MC_VERSION} -X github.com/minio/mc/cmd.CopyrightYear=2025 -X github.com/minio/mc/cmd.ReleaseTag=RELEASE.2025-11-06T16-25-29Z -X github.com/minio/mc/cmd.CommitID=${MC_COMMIT} -X github.com/minio/mc/cmd.ShortCommitID=${MC_SHORT_COMMIT}" \
       -o /go/bin/mc .
 

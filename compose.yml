@@ -11,6 +11,8 @@ services:
     image: ${API_IMAGE:-myblog-api:latest}
     build:
       context: ./apps/api
+      args:
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
     entrypoint: ["/bin/sh", "/bootstrap/check-secrets.sh"]
     environment:
       APP_ENV: ${APP_ENV:-production}
@@ -42,6 +44,7 @@ services:
       context: ./deploy/mysql
       args:
         GOSU_COMMIT: 6456aaa0f3c854d199d0f037f068eb97515b7513
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
     restart: unless-stopped
     command: ["mysqld", "--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--default-time-zone=+00:00", "--mysqlx=0"]
     environment:
@@ -78,6 +81,7 @@ services:
         MC_COMMIT: 77f82e18b5401a65958f1619df6ebb994634bd88
         MC_SHORT_COMMIT: 77f82e18b540
         MC_VERSION: "2025-11-06T16:25:29Z"
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
     restart: unless-stopped
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
@@ -113,6 +117,7 @@ services:
         MC_COMMIT: 77f82e18b5401a65958f1619df6ebb994634bd88
         MC_SHORT_COMMIT: 77f82e18b540
         MC_VERSION: "2025-11-06T16:25:29Z"
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
     entrypoint: ["/bin/sh", "/bootstrap/init.sh"]
     environment:
       MC_CONFIG_DIR: /tmp/mc
@@ -126,7 +131,7 @@ services:
     depends_on:
       minio: { condition: service_healthy }
     networks: [backend]
-    mem_limit: 80m
+    mem_limit: 160m
     pids_limit: 50
     read_only: true
     tmpfs: ["/tmp:size=16m,noexec,nosuid,nodev"]
@@ -138,6 +143,8 @@ services:
     image: ${API_IMAGE:-myblog-api:latest}
     build:
       context: ./apps/api
+      args:
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
     restart: unless-stopped
     stop_grace_period: 20s
     environment:
@@ -237,6 +244,7 @@ services:
       context: ./deploy/mysql
       args:
         GOSU_COMMIT: 6456aaa0f3c854d199d0f037f068eb97515b7513
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
     entrypoint: ["/bin/sh", "/bootstrap/init-artalk-bridge.sh"]
     environment:
       MYSQL_HISTFILE: /dev/null
