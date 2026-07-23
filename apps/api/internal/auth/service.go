@@ -192,11 +192,11 @@ func (s *Service) Authenticate(ctx context.Context, cookieValue string) (Session
 	var storedCSRFHash []byte
 	var refreshLastSeen bool
 	err := s.db.QueryRowContext(ctx, `
-		SELECT session.github_id, current_user.github_login, current_user.display_name,
-		       current_user.email, current_user.avatar_url, session.csrf_token_hash,
+		SELECT session.github_id, session_user.github_login, session_user.display_name,
+		       session_user.email, session_user.avatar_url, session.csrf_token_hash,
 		       session.last_seen_at <= UTC_TIMESTAMP(6) - INTERVAL 5 MINUTE AS refresh_last_seen
 		FROM user_sessions AS session
-		INNER JOIN github_users AS current_user ON current_user.github_id = session.github_id
+		INNER JOIN github_users AS session_user ON session_user.github_id = session.github_id
 		WHERE session.token_hash = ? AND session.expires_at > UTC_TIMESTAMP(6)
 	`, tokenHash[:]).Scan(
 		&githubID, &session.User.Login, &session.User.Name, &session.User.Email, &session.User.AvatarURL,
