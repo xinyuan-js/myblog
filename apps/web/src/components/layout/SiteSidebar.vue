@@ -22,7 +22,7 @@ const tagsExpanded = ref(false)
         <img v-if="profile?.avatarUrl" :src="profile.avatarUrl" :alt="profile.authorName" />
         <span v-else aria-hidden="true">见</span>
       </RouterLink>
-      <h2>{{ profile?.authorName ?? '见山' }}</h2>
+      <h2>{{ profile?.authorName ?? '博主' }}</h2>
       <span class="accent-line" />
       <p>{{ profile?.authorBio ?? '正在加载站点介绍…' }}</p>
       <div class="social-links">

@@ -33,6 +33,9 @@ func TestOpenAPIOperationsMatchRegisteredRoutes(t *testing.T) {
 	actual := make(map[string]bool)
 	parameter := regexp.MustCompile(`:([^/]+)`)
 	for _, route := range router.Routes() {
+		if strings.HasPrefix(route.Path, "/internal/artalk/") {
+			continue
+		}
 		path := strings.TrimPrefix(route.Path, "/api")
 		path = parameter.ReplaceAllString(path, `{$1}`)
 		actual[route.Method+" "+path] = true

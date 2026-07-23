@@ -86,6 +86,8 @@ services:
       SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-blog_session}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
       SESSION_TTL: ${SESSION_TTL:-168h}
+      COMMENT_DAILY_LIMIT: ${COMMENT_DAILY_LIMIT:-20}
+      COMMENT_DAY_UTC_OFFSET: ${COMMENT_DAY_UTC_OFFSET:-8}
       ARTALK_DATABASE_DSN: blog_artalk_bridge:${ARTALK_DB_PASSWORD}@tcp(mysql:3306)/artalk?charset=utf8mb4&parseTime=true&loc=UTC
       ARTALK_INTERNAL_URL: http://artalk:23366
       MINIO_ENDPOINT: minio:9000

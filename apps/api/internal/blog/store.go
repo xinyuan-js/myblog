@@ -35,14 +35,14 @@ func NewStore(db *sql.DB, mediaPublicURL ...string) *Store {
 
 func (s *Store) SiteProfile(ctx context.Context) (SiteProfile, error) {
 	var profile SiteProfile
-	var avatar, banner, icp sql.NullString
+	var avatar, banner, icp, publicSecurityRecord sql.NullString
 	var socialJSON []byte
 	err := s.db.QueryRowContext(ctx, `
 		SELECT title, subtitle, description, avatar_url, banner_url,
-		       author_name, author_bio, about_markdown, social_links, icp_number
+		       author_name, author_bio, about_markdown, social_links, icp_number, public_security_record_number
 		FROM site_settings WHERE id = 1
 	`).Scan(&profile.Title, &profile.Subtitle, &profile.Description, &avatar, &banner,
-		&profile.AuthorName, &profile.AuthorBio, &profile.AboutMarkdown, &socialJSON, &icp)
+		&profile.AuthorName, &profile.AuthorBio, &profile.AboutMarkdown, &socialJSON, &icp, &publicSecurityRecord)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SiteProfile{}, ErrNotFound
 	}
@@ -52,6 +52,7 @@ func (s *Store) SiteProfile(ctx context.Context) (SiteProfile, error) {
 	profile.AvatarURL = nullableString(avatar)
 	profile.BannerURL = nullableString(banner)
 	profile.ICPNumber = nullableString(icp)
+	profile.PublicSecurityRecordNumber = nullableString(publicSecurityRecord)
 	if err := json.Unmarshal(socialJSON, &profile.SocialLinks); err != nil {
 		return SiteProfile{}, fmt.Errorf("decode social links: %w", err)
 	}

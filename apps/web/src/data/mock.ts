@@ -7,14 +7,15 @@ export const mockSiteProfile: SiteProfile = {
   description: '记录工程实践、阅读笔记和生活里值得停留的瞬间。',
   avatarUrl: null,
   bannerUrl,
-  authorName: '见山',
+  authorName: '示例作者',
   authorBio: 'Go 开发者，长期主义练习生。喜欢可靠的软件，也喜欢不赶时间的文字。',
-  aboutMarkdown: '# 你好，我是见山。\n\nGo 开发者，长期主义练习生。\n\n## 关于这个博客\n\n这里记录工程实践、阅读笔记和生活里值得停留的瞬间。',
+  aboutMarkdown: '# 你好，我是示例作者。\n\n这里是一段可在管理端修改的个人介绍。\n\n## 关于这个博客\n\n这里记录工程实践、阅读笔记和生活里值得停留的瞬间。',
   socialLinks: [
     { label: 'GitHub', url: 'https://github.com/', icon: 'github' },
     { label: 'Email', url: 'mailto:hello@example.com', icon: 'mail' },
   ],
   icpNumber: null,
+  publicSecurityRecordNumber: null,
 }
 
 export const mockTags: Tag[] = [

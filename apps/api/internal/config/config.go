@@ -41,6 +41,8 @@ type Config struct {
 	SessionCookieName  string
 	SessionSecure      bool
 	SessionTTL         time.Duration
+	CommentDailyLimit  int
+	CommentDayOffset   int
 	ArtalkDatabaseDSN  string
 	ArtalkInternalURL  string
 	MinIOEndpoint      string
@@ -74,6 +76,8 @@ func Load() (Config, error) {
 		SessionCookieName:  envOrDefault("SESSION_COOKIE_NAME", "blog_session"),
 		SessionSecure:      envOrDefault("SESSION_COOKIE_SECURE", "false") == "true",
 		SessionTTL:         7 * 24 * time.Hour,
+		CommentDailyLimit:  20,
+		CommentDayOffset:   8,
 		ArtalkDatabaseDSN:  envOrDefault("ARTALK_DATABASE_DSN", "artalk:artalk@tcp(127.0.0.1:3306)/artalk?charset=utf8mb4&parseTime=true&loc=UTC"),
 		ArtalkInternalURL:  strings.TrimSuffix(envOrDefault("ARTALK_INTERNAL_URL", "http://127.0.0.1:23366"), "/"),
 		MinIOEndpoint:      envOrDefault("MINIO_ENDPOINT", "127.0.0.1:9000"),
@@ -115,6 +119,12 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.SessionTTL, err = durationFromEnv("SESSION_TTL", cfg.SessionTTL); err != nil {
+		return Config{}, err
+	}
+	if cfg.CommentDailyLimit, err = intFromEnv("COMMENT_DAILY_LIMIT", cfg.CommentDailyLimit); err != nil {
+		return Config{}, err
+	}
+	if cfg.CommentDayOffset, err = intFromEnv("COMMENT_DAY_UTC_OFFSET", cfg.CommentDayOffset); err != nil {
 		return Config{}, err
 	}
 
@@ -164,6 +174,12 @@ func (c Config) Validate() error {
 	}
 	if c.DatabaseMaxIdle < 0 || c.DatabaseMaxIdle > c.DatabaseMaxOpen {
 		return errors.New("DATABASE_MAX_IDLE must be between 0 and DATABASE_MAX_OPEN")
+	}
+	if c.CommentDailyLimit < 1 || c.CommentDailyLimit > 1000 {
+		return errors.New("COMMENT_DAILY_LIMIT must be between 1 and 1000")
+	}
+	if c.CommentDayOffset < -12 || c.CommentDayOffset > 14 {
+		return errors.New("COMMENT_DAY_UTC_OFFSET must be between -12 and 14")
 	}
 	appOrigin, err := url.Parse(c.AppOrigin)
 	if err != nil || (appOrigin.Scheme != "http" && appOrigin.Scheme != "https") || appOrigin.Host == "" ||

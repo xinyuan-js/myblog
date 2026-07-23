@@ -87,7 +87,12 @@ onBeforeUnmount(() => {
         <div class="content-stack">
           <slot />
         </div>
-        <SiteFooter class="onload-footer" :author-name="profile?.authorName ?? '见山'" :icp-number="profile?.icpNumber" />
+        <SiteFooter
+          class="onload-footer"
+          :author-name="profile?.authorName ?? '博主'"
+          :icp-number="profile?.icpNumber"
+          :public-security-record-number="profile?.publicSecurityRecordNumber"
+        />
       </div>
       <BackToTop />
     </div>

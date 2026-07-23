@@ -99,6 +99,11 @@ func runMaintenance(ctx context.Context, db interface {
 		if _, err := db.ExecContext(maintenanceContext, `DELETE FROM oauth_states WHERE expires_at <= UTC_TIMESTAMP(6)`); err != nil {
 			logger.Error("clean expired oauth states", "error", err)
 		}
+		if _, err := db.ExecContext(maintenanceContext,
+			`DELETE FROM comment_daily_usage WHERE usage_date < UTC_DATE() - INTERVAL 90 DAY`,
+		); err != nil {
+			logger.Error("clean old comment usage", "error", err)
+		}
 		if err := uploads.CleanupTrashed(maintenanceContext, time.Now().UTC().Add(-30*24*time.Hour), 100); err != nil {
 			logger.Error("clean trashed uploads", "error", err)
 		}

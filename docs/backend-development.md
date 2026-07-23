@@ -136,7 +136,7 @@ Go API 不建立评论表，不代理 Artalk 用户，不把 Artalk 管理接口
   "description": "记录工程实践、阅读笔记和生活。",
   "avatarUrl": "/uploads/site/avatar.webp",
   "bannerUrl": "/uploads/site/banner.webp",
-  "authorName": "见山",
+  "authorName": "示例作者",
   "authorBio": "Go 开发者，长期主义练习生。",
   "socialLinks": [
     { "label": "GitHub", "url": "https://github.com/example", "icon": "github" }
@@ -384,7 +384,7 @@ GET /api/auth/me
     "user": {
       "githubId": 12345678,
       "login": "demo-admin",
-      "name": "见山",
+      "name": "示例管理员",
       "avatarUrl": "https://avatars.githubusercontent.com/..."
     },
     "csrfToken": "base64url-token"

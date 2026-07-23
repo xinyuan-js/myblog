@@ -32,6 +32,7 @@ const router = createRouter({
     { path: '/admin/taxonomies', name: 'admin-taxonomies', meta: { layout: 'admin', requiresAuth: true }, component: () => import('@/pages/admin/AdminTaxonomiesPage.vue') },
     { path: '/admin/media', name: 'admin-media', meta: { layout: 'admin', requiresAuth: true }, component: () => import('@/pages/admin/AdminMediaPage.vue') },
     { path: '/admin/site', name: 'admin-site', meta: { layout: 'admin', requiresAuth: true }, component: () => import('@/pages/admin/AdminSiteSettingsPage.vue') },
+    { path: '/admin/users', name: 'admin-users', meta: { layout: 'admin', requiresAuth: true }, component: () => import('@/pages/admin/AdminUsersPage.vue') },
     { path: '/admin/administrators', name: 'admin-administrators', meta: { layout: 'admin', requiresAuth: true, requiresOwner: true }, component: () => import('@/pages/admin/AdminAdministratorsPage.vue') },
     { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('@/pages/NotFoundPage.vue') },
   ],

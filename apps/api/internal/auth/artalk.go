@@ -99,6 +99,9 @@ func (s *Service) CreateArtalkSession(ctx context.Context, session Session) (Art
 	if s.artalkDB == nil {
 		return ArtalkSession{}, errors.New("artalk database is not configured")
 	}
+	if err := s.CheckCommentAccess(ctx, session); err != nil {
+		return ArtalkSession{}, err
+	}
 	identityToken, err := s.IssueArtalkToken(session)
 	if err != nil {
 		return ArtalkSession{}, err

@@ -263,10 +263,11 @@ func (s *Store) UpdateSiteAppearance(ctx context.Context, mutation SiteAppearanc
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE site_settings
 		SET title=?,subtitle=?,description=?,avatar_url=?,banner_url=?,
-		    author_name=?,author_bio=?,about_markdown=?,social_links=?,icp_number=?
+		    author_name=?,author_bio=?,about_markdown=?,social_links=?,icp_number=?,public_security_record_number=?
 		WHERE id=1
 	`, mutation.Title, mutation.Subtitle, mutation.Description, mutation.AvatarURL, mutation.BannerURL,
-		mutation.AuthorName, mutation.AuthorBio, mutation.AboutMarkdown, socialJSON, mutation.ICPNumber); err != nil {
+		mutation.AuthorName, mutation.AuthorBio, mutation.AboutMarkdown, socialJSON, mutation.ICPNumber,
+		mutation.PublicSecurityRecordNumber); err != nil {
 		return SiteProfile{}, err
 	}
 	if err := tx.Commit(); err != nil {

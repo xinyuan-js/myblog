@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/example/myblog/apps/api/internal/auth"
 	"github.com/example/myblog/apps/api/internal/config"
 	"github.com/example/myblog/apps/api/internal/upload"
+	"github.com/gin-gonic/gin"
 )
 
 type Dependencies struct {
@@ -79,10 +79,16 @@ func NewRouter(cfg config.Config, logger *slog.Logger, dependency ...Dependencie
 		api.POST("/auth/logout", authHTTP.logout)
 		api.POST("/auth/artalk/session", authRateLimit, authHTTP.artalkSession)
 		router.GET("/internal/artalk-oidc/userinfo", authHTTP.artalkUserInfo)
+		artalkProxy, err := newArtalkProxyHandler(deps.Auth, logger)
+		if err != nil {
+			return nil, err
+		}
+		router.Any("/internal/artalk/*path", artalkProxy.proxy)
 	}
 	if deps.Auth != nil && deps.AdminStore != nil {
 		adminHTTP := adminHandler{store: deps.AdminStore, logger: logger}
 		administratorHTTP := administratorHandler{service: deps.Auth, logger: logger}
+		commentUserHTTP := commentUserHandler{service: deps.Auth, logger: logger}
 		admin := api.Group("/admin", requireAdmin(deps.Auth, logger))
 		admin.GET("/posts", adminHTTP.posts)
 		admin.GET("/posts/:id", adminHTTP.post)
@@ -101,6 +107,8 @@ func NewRouter(cfg config.Config, logger *slog.Logger, dependency ...Dependencie
 		admin.GET("/administrators", requireOwner(), administratorHTTP.list)
 		admin.POST("/administrators", requireOwner(), requireCSRF(deps.Auth), administratorHTTP.add)
 		admin.DELETE("/administrators/:githubId", requireOwner(), requireCSRF(deps.Auth), administratorHTTP.remove)
+		admin.GET("/users", commentUserHTTP.list)
+		admin.PUT("/users/:githubId/comment-policy", requireCSRF(deps.Auth), commentUserHTTP.update)
 	}
 	if deps.Auth != nil && deps.Uploads != nil {
 		uploadHTTP := uploadHandler{service: deps.Uploads, logger: logger}

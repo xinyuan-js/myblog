@@ -15,6 +15,7 @@ export interface SiteProfile {
     icon: 'github' | 'mail' | 'rss' | 'link'
   }>
   icpNumber: string | null
+  publicSecurityRecordNumber: string | null
 }
 
 export interface SiteAppearanceMutation {
@@ -28,6 +29,7 @@ export interface SiteAppearanceMutation {
   aboutMarkdown: string
   socialLinks: SiteProfile['socialLinks']
   icpNumber: string | null
+  publicSecurityRecordNumber: string | null
 }
 
 export interface Tag {
@@ -114,6 +116,28 @@ export interface Administrator {
   githubId: number
   isOwner: boolean
   grantedAt: ISODateTime | null
+}
+
+export interface CommentUser {
+  githubId: number
+  login: string
+  name: string
+  avatarUrl: string
+  isAdmin: boolean
+  isOwner: boolean
+  commentsBlocked: boolean
+  commentBlockReason: string
+  dailyLimit: number | null
+  effectiveDailyLimit: number
+  todayCount: number
+  createdAt: ISODateTime
+  updatedAt: ISODateTime
+}
+
+export interface CommentPolicyMutation {
+  commentsBlocked: boolean
+  commentBlockReason: string
+  dailyLimit: number | null
 }
 
 export interface ArtalkSession {

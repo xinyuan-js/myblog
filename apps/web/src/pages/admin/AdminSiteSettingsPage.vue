@@ -16,6 +16,7 @@ const form = reactive<SiteAppearanceMutation>({
   aboutMarkdown: '',
   socialLinks: [],
   icpNumber: null,
+  publicSecurityRecordNumber: null,
 })
 const loading = ref(true)
 const saving = ref(false)
@@ -99,6 +100,7 @@ async function save() {
       <label class="admin-field full-width"><span>站点描述</span><textarea v-model="form.description" class="admin-textarea compact" maxlength="500" /></label>
       <label class="admin-field"><span>作者名称</span><input v-model="form.authorName" class="admin-input" maxlength="120" required /></label>
       <label class="admin-field"><span>ICP备案号</span><input v-model="form.icpNumber" class="admin-input" maxlength="100" placeholder="未备案可留空" /></label>
+      <label class="admin-field"><span>公安联网备案号</span><input v-model="form.publicSecurityRecordNumber" class="admin-input" maxlength="100" placeholder="例如：京公网安备 11000000000000号" /></label>
       <label class="admin-field full-width"><span>作者简介</span><textarea v-model="form.authorBio" class="admin-textarea compact" maxlength="500" /></label>
     </section>
 

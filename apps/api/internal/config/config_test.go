@@ -65,6 +65,7 @@ func TestValidateRejectsUnsafeURLAndCredentialConfiguration(t *testing.T) {
 		AppOrigin: "https://blog.example.com", GitHubClientID: "id", GitHubClientSecret: "secret", GitHubAdminID: 1,
 		GitHubCallbackURL: "https://blog.example.com/api/auth/github/callback", OAuthStateSecret: "0123456789abcdef0123456789abcdef",
 		SessionCookieName: "blog_session", SessionSecure: true, SessionTTL: time.Hour,
+		CommentDailyLimit: 20, CommentDayOffset: 8,
 		ArtalkDatabaseDSN: "artalk-dsn", ArtalkInternalURL: "http://artalk:23366",
 		MinIOEndpoint: "minio:9000", MinIOAccessKey: "access", MinIOSecretKey: "0123456789abcdef0123456789abcdef",
 		MinIOBucket: "blog-media", MediaPublicURL: "/uploads",

@@ -31,6 +31,7 @@ describe('external URL safety', () => {
         { label: 'Unsafe', url: 'javascript:alert(1)', icon: 'link' },
       ],
       icpNumber: null,
+      publicSecurityRecordNumber: null,
     }
 
     expect(sanitizeSiteProfile(profile).socialLinks).toEqual([profile.socialLinks[0]])

@@ -137,6 +137,7 @@ func TestMySQLBlogAndMediaLifecycle(t *testing.T) {
 		AvatarURL: &asset.URL, BannerURL: currentProfile.BannerURL,
 		AuthorName: currentProfile.AuthorName, AuthorBio: currentProfile.AuthorBio,
 		AboutMarkdown: currentProfile.AboutMarkdown, SocialLinks: currentProfile.SocialLinks, ICPNumber: currentProfile.ICPNumber,
+		PublicSecurityRecordNumber: currentProfile.PublicSecurityRecordNumber,
 	}
 	profile, err := store.UpdateSiteAppearance(context.Background(), siteMutation)
 	if err != nil || profile.AvatarURL == nil {

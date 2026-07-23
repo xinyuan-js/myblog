@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"github.com/example/myblog/apps/api/internal/auth"
+	"github.com/gin-gonic/gin"
 )
 
 const adminSessionKey = "admin_session"
@@ -37,6 +37,7 @@ func (h authHandler) githubCallback(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	// Set before any redirect writes the response headers.
 	http.SetCookie(c.Writer, h.service.ClearStateCookie())
+	http.SetCookie(c.Writer, h.service.ClearLegacySessionCookie())
 	if c.Query("error") == "access_denied" {
 		h.redirectLoginError(c, "access_denied")
 		return
@@ -77,6 +78,13 @@ func (h authHandler) me(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"data": gin.H{"authenticated": false, "user": nil, "csrfToken": nil}})
 		return
 	}
+	// Migrate sessions created before the comment policy gateway changed the
+	// cookie path from /api to /. The legacy cookie is deleted in the same
+	// response so duplicate cookie names cannot confuse later authentication.
+	if cookie, cookieErr := h.service.SessionCookie(session); cookieErr == nil {
+		http.SetCookie(c.Writer, h.service.ClearLegacySessionCookie())
+		http.SetCookie(c.Writer, cookie)
+	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
 		"authenticated": true, "user": session.User, "csrfToken": session.CSRFToken,
 	}})
@@ -101,6 +109,7 @@ func (h authHandler) logout(c *gin.Context) {
 		return
 	}
 	http.SetCookie(c.Writer, h.service.ClearSessionCookie())
+	http.SetCookie(c.Writer, h.service.ClearLegacySessionCookie())
 	h.logger.Info("user logged out", "requestId", requestIDFromContext(c), "githubId", session.User.GitHubID)
 	c.Status(http.StatusNoContent)
 }
@@ -120,6 +129,9 @@ func (h authHandler) artalkSession(c *gin.Context) {
 		return
 	}
 	artalkSession, err := h.service.CreateArtalkSession(c.Request.Context(), session)
+	if writeCommentPolicyError(c, err) {
+		return
+	}
 	if err != nil {
 		h.internalError(c, "create Artalk session", err)
 		return
@@ -151,6 +163,7 @@ func (h authHandler) optionalSession(c *gin.Context) (auth.Session, bool, error)
 	session, err := h.service.Authenticate(c.Request.Context(), cookie.Value)
 	if errors.Is(err, auth.ErrUnauthenticated) {
 		http.SetCookie(c.Writer, h.service.ClearSessionCookie())
+		http.SetCookie(c.Writer, h.service.ClearLegacySessionCookie())
 		return auth.Session{}, false, nil
 	}
 	return session, err == nil, err
@@ -160,6 +173,7 @@ func (h authHandler) redirectLoginError(c *gin.Context, code string) {
 	// A failed OAuth attempt must leave the browser logged out of this
 	// application, even if it arrived with an older blog session cookie.
 	http.SetCookie(c.Writer, h.service.ClearSessionCookie())
+	http.SetCookie(c.Writer, h.service.ClearLegacySessionCookie())
 	target := h.service.AppURL("/login?error=" + url.QueryEscape(code))
 	c.Redirect(http.StatusFound, target)
 }
@@ -180,6 +194,7 @@ func requireAdmin(service *auth.Service, logger *slog.Logger) gin.HandlerFunc {
 		session, err := service.Authenticate(c.Request.Context(), cookie.Value)
 		if errors.Is(err, auth.ErrUnauthenticated) {
 			http.SetCookie(c.Writer, service.ClearSessionCookie())
+			http.SetCookie(c.Writer, service.ClearLegacySessionCookie())
 			writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "登录状态已失效")
 			return
 		}

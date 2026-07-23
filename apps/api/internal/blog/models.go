@@ -9,16 +9,17 @@ type SocialLink struct {
 }
 
 type SiteProfile struct {
-	Title         string       `json:"title"`
-	Subtitle      string       `json:"subtitle"`
-	Description   string       `json:"description"`
-	AvatarURL     *string      `json:"avatarUrl"`
-	BannerURL     *string      `json:"bannerUrl"`
-	AuthorName    string       `json:"authorName"`
-	AuthorBio     string       `json:"authorBio"`
-	AboutMarkdown string       `json:"aboutMarkdown"`
-	SocialLinks   []SocialLink `json:"socialLinks"`
-	ICPNumber     *string      `json:"icpNumber"`
+	Title                      string       `json:"title"`
+	Subtitle                   string       `json:"subtitle"`
+	Description                string       `json:"description"`
+	AvatarURL                  *string      `json:"avatarUrl"`
+	BannerURL                  *string      `json:"bannerUrl"`
+	AuthorName                 string       `json:"authorName"`
+	AuthorBio                  string       `json:"authorBio"`
+	AboutMarkdown              string       `json:"aboutMarkdown"`
+	SocialLinks                []SocialLink `json:"socialLinks"`
+	ICPNumber                  *string      `json:"icpNumber"`
+	PublicSecurityRecordNumber *string      `json:"publicSecurityRecordNumber"`
 }
 
 type Tag struct {
@@ -108,14 +109,15 @@ type TaxonomyMutation struct {
 }
 
 type SiteAppearanceMutation struct {
-	Title         string       `json:"title"`
-	Subtitle      string       `json:"subtitle"`
-	Description   string       `json:"description"`
-	AvatarURL     *string      `json:"avatarUrl"`
-	BannerURL     *string      `json:"bannerUrl"`
-	AuthorName    string       `json:"authorName"`
-	AuthorBio     string       `json:"authorBio"`
-	AboutMarkdown string       `json:"aboutMarkdown"`
-	SocialLinks   []SocialLink `json:"socialLinks"`
-	ICPNumber     *string      `json:"icpNumber"`
+	Title                      string       `json:"title"`
+	Subtitle                   string       `json:"subtitle"`
+	Description                string       `json:"description"`
+	AvatarURL                  *string      `json:"avatarUrl"`
+	BannerURL                  *string      `json:"bannerUrl"`
+	AuthorName                 string       `json:"authorName"`
+	AuthorBio                  string       `json:"authorBio"`
+	AboutMarkdown              string       `json:"aboutMarkdown"`
+	SocialLinks                []SocialLink `json:"socialLinks"`
+	ICPNumber                  *string      `json:"icpNumber"`
+	PublicSecurityRecordNumber *string      `json:"publicSecurityRecordNumber"`
 }

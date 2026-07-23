@@ -85,6 +85,7 @@ async function logout() {
         <RouterLink to="/admin/taxonomies">标签与分类</RouterLink>
         <RouterLink to="/admin/media">媒体库</RouterLink>
         <RouterLink to="/admin/site">站点设置</RouterLink>
+        <RouterLink to="/admin/users">用户管理</RouterLink>
         <RouterLink v-if="user?.isOwner" to="/admin/administrators">管理员权限</RouterLink>
         <a href="/" target="_blank">查看博客 ↗</a>
       </nav>

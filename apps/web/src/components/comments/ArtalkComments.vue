@@ -85,7 +85,7 @@ async function synchronizeIdentity() {
   } catch (error) {
     console.error('评论身份同步失败', error)
     identityState.value = 'error'
-    identityError.value = '登录状态同步失败，评论暂时不可发表。'
+    identityError.value = error instanceof Error ? error.message : '登录状态同步失败，评论暂时不可发表。'
   }
 }
 

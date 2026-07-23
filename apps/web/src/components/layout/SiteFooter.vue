@@ -1,11 +1,31 @@
 <script setup lang="ts">
-defineProps<{ authorName: string; icpNumber?: string | null }>()
+defineProps<{
+  authorName: string
+  icpNumber?: string | null
+  publicSecurityRecordNumber?: string | null
+}>()
+
+function publicSecurityRecordURL(value: string) {
+  const recordCode = value.match(/\d{10,}/)?.[0]
+  const baseURL = 'https://beian.mps.gov.cn/#/query/webSearch'
+  return recordCode ? `${baseURL}?code=${encodeURIComponent(recordCode)}` : baseURL
+}
 </script>
 
 <template>
   <footer class="site-footer">
     <div class="footer-line" />
-    <p>© {{ new Date().getFullYear() }} {{ authorName }} / <RouterLink to="/archive">归档</RouterLink> / <RouterLink to="/about">关于</RouterLink><template v-if="icpNumber"> / <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener">{{ icpNumber }}</a></template></p>
+    <p>
+      © {{ new Date().getFullYear() }} {{ authorName }}
+      / <RouterLink to="/archive">归档</RouterLink>
+      / <RouterLink to="/about">关于</RouterLink>
+      <template v-if="icpNumber">
+        / <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">{{ icpNumber }}</a>
+      </template>
+      <template v-if="publicSecurityRecordNumber">
+        / <a :href="publicSecurityRecordURL(publicSecurityRecordNumber)" target="_blank" rel="noopener noreferrer">{{ publicSecurityRecordNumber }}</a>
+      </template>
+    </p>
   </footer>
 </template>
 

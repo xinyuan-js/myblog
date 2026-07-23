@@ -73,6 +73,8 @@ func usableOAuthCredential(value string) bool {
 
 func (s *Service) SessionCookieName() string { return s.cfg.SessionCookieName }
 
+func (s *Service) ArtalkInternalURL() string { return s.cfg.ArtalkInternalURL }
+
 func (s *Service) AppURL(path string) string {
 	return strings.TrimSuffix(s.cfg.AppOrigin, "/") + path
 }
@@ -155,12 +157,17 @@ func (s *Service) SessionCookie(session Session) (*http.Cookie, error) {
 		return nil, errors.New("session tokens are missing")
 	}
 	return &http.Cookie{
-		Name: s.cfg.SessionCookieName, Value: value, Path: "/api", MaxAge: int(s.cfg.SessionTTL.Seconds()),
+		Name: s.cfg.SessionCookieName, Value: value, Path: "/", MaxAge: int(s.cfg.SessionTTL.Seconds()),
 		HttpOnly: true, Secure: s.cfg.SessionSecure, SameSite: http.SameSiteLaxMode,
 	}, nil
 }
 
 func (s *Service) ClearSessionCookie() *http.Cookie {
+	return &http.Cookie{Name: s.cfg.SessionCookieName, Value: "", Path: "/", MaxAge: -1,
+		HttpOnly: true, Secure: s.cfg.SessionSecure, SameSite: http.SameSiteLaxMode}
+}
+
+func (s *Service) ClearLegacySessionCookie() *http.Cookie {
 	return &http.Cookie{Name: s.cfg.SessionCookieName, Value: "", Path: "/api", MaxAge: -1,
 		HttpOnly: true, Secure: s.cfg.SessionSecure, SameSite: http.SameSiteLaxMode}
 }
@@ -210,6 +217,7 @@ func (s *Service) Authenticate(ctx context.Context, cookieValue string) (Session
 	}
 	session.CSRFToken = csrf
 	session.TokenHash = tokenHash
+	session.rawToken = token
 	_, _ = s.db.ExecContext(ctx, `UPDATE user_sessions SET last_seen_at = UTC_TIMESTAMP(6) WHERE token_hash = ?`, tokenHash[:])
 	return session, nil
 }

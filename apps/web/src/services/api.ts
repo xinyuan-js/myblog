@@ -5,6 +5,8 @@ import type {
   AuthState,
   AuthUser,
   Category,
+  CommentPolicyMutation,
+  CommentUser,
   Paginated,
   PostDetail,
   PostMutation,
@@ -44,6 +46,8 @@ export interface BlogApi {
   listAdministrators(): Promise<Administrator[]>
   addAdministrator(githubId: number): Promise<Administrator>
   removeAdministrator(githubId: number): Promise<void>
+  listCommentUsers(query?: string): Promise<CommentUser[]>
+  updateCommentPolicy(githubId: number, input: CommentPolicyMutation): Promise<CommentUser>
   listAdminPosts(query?: PostQuery): Promise<Paginated<PostSummary>>
   getAdminPost(id: number): Promise<PostDetail>
   createPost(input: PostMutation): Promise<PostDetail>
@@ -73,6 +77,14 @@ class MockBlogApi implements BlogApi {
   private uploads: MediaItem[] = []
   private administrators: Administrator[] = [
     { githubId: 12345678, isOwner: true, grantedAt: null },
+  ]
+  private commentUsers: CommentUser[] = [
+    {
+      githubId: 87654321, login: 'example-user', name: '示例用户', avatarUrl: '',
+      isAdmin: false, isOwner: false, commentsBlocked: false, commentBlockReason: '',
+      dailyLimit: null, effectiveDailyLimit: 20, todayCount: 2,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    },
   ]
 
   async getSiteProfile() {
@@ -148,8 +160,8 @@ class MockBlogApi implements BlogApi {
       user: {
         githubId: 12345678,
         login: 'demo-admin',
-        name: '见山',
-        avatarUrl: 'https://avatars.githubusercontent.com/u/583231?v=4',
+        name: '示例管理员',
+        avatarUrl: '',
         isAdmin: true,
         isOwner: true,
       },
@@ -161,7 +173,7 @@ class MockBlogApi implements BlogApi {
     if (!this.authenticated) throw new ApiError(401, 'AUTH_REQUIRED', '请先登录')
     return {
       token: 'mock-artalk-token',
-      user: { id: 1, name: '见山', email: 'demo@example.com', is_admin: true },
+      user: { id: 1, name: '示例管理员', email: 'demo@example.com', is_admin: true },
     }
   }
 
@@ -184,6 +196,25 @@ class MockBlogApi implements BlogApi {
     const index = this.administrators.findIndex((item) => item.githubId === githubId && !item.isOwner)
     if (index < 0) throw new ApiError(404, 'ADMINISTRATOR_NOT_FOUND', '管理员不存在')
     this.administrators.splice(index, 1)
+  }
+
+  async listCommentUsers(query = '') {
+    await wait()
+    const keyword = query.trim().toLocaleLowerCase()
+    return clone(this.commentUsers.filter((item) =>
+      !keyword || `${item.githubId} ${item.login} ${item.name}`.toLocaleLowerCase().includes(keyword),
+    ))
+  }
+
+  async updateCommentPolicy(githubId: number, input: CommentPolicyMutation) {
+    await wait()
+    const user = this.commentUsers.find((item) => item.githubId === githubId)
+    if (!user) throw new ApiError(404, 'COMMENT_USER_NOT_FOUND', '用户不存在')
+    Object.assign(user, input, {
+      effectiveDailyLimit: input.dailyLimit ?? 20,
+      updatedAt: new Date().toISOString(),
+    })
+    return clone(user)
   }
 
   async listAdminPosts(query: PostQuery = {}) {
@@ -386,6 +417,10 @@ class HttpBlogApi implements BlogApi {
     this.request<Administrator>('/admin/administrators', { method: 'POST', body: { githubId } })
   removeAdministrator = (githubId: number) =>
     this.request<void>(`/admin/administrators/${githubId}`, { method: 'DELETE' })
+  listCommentUsers = (query = '') =>
+    this.request<CommentUser[]>(`/admin/users${query.trim() ? `?q=${encodeURIComponent(query.trim())}` : ''}`)
+  updateCommentPolicy = (githubId: number, input: CommentPolicyMutation) =>
+    this.request<CommentUser>(`/admin/users/${githubId}/comment-policy`, { method: 'PUT', body: input })
   listAdminPosts = (query: PostQuery = {}) =>
     this.request<Paginated<PostSummary>>(`/admin/posts${this.query(query)}`)
   getAdminPost = (id: number) => this.request<PostDetail>(`/admin/posts/${id}`)

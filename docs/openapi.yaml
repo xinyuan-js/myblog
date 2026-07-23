@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: MyBlog API
   version: 1.0.0
-  description: Vue 前端已验证的数据契约。评论接口由 Artalk 独立提供。
+  description: Vue 前端已验证的数据契约。Artalk 评论写入由 Gin 网关执行账号封禁和每日额度策略。
 servers:
   - url: /api
 tags:
@@ -11,6 +11,7 @@ tags:
   - name: Admin Posts
   - name: Admin Taxonomies
   - name: Uploads
+  - name: Admin Users
 paths:
   /healthz:
     get:
@@ -579,6 +580,48 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /admin/users:
+    get:
+      tags: [Admin Users]
+      summary: 列出通过 GitHub 登录过的评论用户
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string, maxLength: 100 }
+          description: 按 GitHub ID、用户名或昵称搜索
+      responses:
+        '200':
+          description: 用户列表
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CommentUserListResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/users/{githubId}/comment-policy:
+    put:
+      tags: [Admin Users]
+      summary: 更新普通用户的评论封禁和每日额度
+      security: [{ sessionCookie: [], csrfToken: [] }]
+      parameters:
+        - name: githubId
+          in: path
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CommentPolicyMutation' }
+      responses:
+        '200':
+          description: 评论策略已更新
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CommentUserResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 components:
   securitySchemes:
     sessionCookie:
@@ -664,7 +707,7 @@ components:
         icon: { type: string, enum: [github, mail, rss, link] }
     SiteProfile:
       type: object
-      required: [title, subtitle, description, avatarUrl, bannerUrl, authorName, authorBio, aboutMarkdown, socialLinks, icpNumber]
+      required: [title, subtitle, description, avatarUrl, bannerUrl, authorName, authorBio, aboutMarkdown, socialLinks, icpNumber, publicSecurityRecordNumber]
       properties:
         title: { type: string }
         subtitle: { type: string }
@@ -678,10 +721,11 @@ components:
           type: array
           items: { $ref: '#/components/schemas/SocialLink' }
         icpNumber: { type: [string, 'null'] }
+        publicSecurityRecordNumber: { type: [string, 'null'] }
     SiteAppearanceMutation:
       type: object
       additionalProperties: false
-      required: [title, subtitle, description, avatarUrl, bannerUrl, authorName, authorBio, aboutMarkdown, socialLinks, icpNumber]
+      required: [title, subtitle, description, avatarUrl, bannerUrl, authorName, authorBio, aboutMarkdown, socialLinks, icpNumber, publicSecurityRecordNumber]
       properties:
         title: { type: string, minLength: 1, maxLength: 120 }
         subtitle: { type: string, maxLength: 200 }
@@ -696,6 +740,7 @@ components:
           maxItems: 10
           items: { $ref: '#/components/schemas/SocialLink' }
         icpNumber: { type: [string, 'null'], maxLength: 100 }
+        publicSecurityRecordNumber: { type: [string, 'null'], maxLength: 100 }
     SiteProfileResponse:
       type: object
       required: [data]
@@ -897,6 +942,43 @@ components:
         data:
           type: array
           items: { $ref: '#/components/schemas/Administrator' }
+    CommentUser:
+      type: object
+      required: [githubId, login, name, avatarUrl, isAdmin, isOwner, commentsBlocked, commentBlockReason, dailyLimit, effectiveDailyLimit, todayCount, createdAt, updatedAt]
+      properties:
+        githubId: { type: integer, format: int64, minimum: 1 }
+        login: { type: string }
+        name: { type: string }
+        avatarUrl: { type: string }
+        isAdmin: { type: boolean }
+        isOwner: { type: boolean }
+        commentsBlocked: { type: boolean }
+        commentBlockReason: { type: string, maxLength: 500 }
+        dailyLimit: { type: [integer, 'null'], minimum: 1, maximum: 1000 }
+        effectiveDailyLimit: { type: integer, minimum: 1, maximum: 1000 }
+        todayCount: { type: integer, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CommentPolicyMutation:
+      type: object
+      additionalProperties: false
+      required: [commentsBlocked, commentBlockReason, dailyLimit]
+      properties:
+        commentsBlocked: { type: boolean }
+        commentBlockReason: { type: string, maxLength: 500 }
+        dailyLimit: { type: [integer, 'null'], minimum: 1, maximum: 1000 }
+    CommentUserResponse:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: '#/components/schemas/CommentUser' }
+    CommentUserListResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/CommentUser' }
     Upload:
       type: object
       required: [id, url, filename, contentType, size, width, height, status, usageCount, references, createdAt, trashedAt]

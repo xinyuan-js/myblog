@@ -16,8 +16,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/gin-gonic/gin"
 	"github.com/example/myblog/apps/api/internal/blog"
+	"github.com/gin-gonic/gin"
 )
 
 var markdownSyntax = regexp.MustCompile(`(?m)^[#>*+\-]+\s*|[` + "`" + `*_~\[\]()]`)
@@ -310,6 +310,16 @@ func (h adminHandler) updateSiteAppearance(c *gin.Context) {
 			fields["icpNumber"] = "备案号不能超过 100 个字符"
 		} else {
 			mutation.ICPNumber = &value
+		}
+	}
+	if mutation.PublicSecurityRecordNumber != nil {
+		value := strings.TrimSpace(*mutation.PublicSecurityRecordNumber)
+		if value == "" {
+			mutation.PublicSecurityRecordNumber = nil
+		} else if utf8.RuneCountInString(value) > 100 {
+			fields["publicSecurityRecordNumber"] = "公安备案号不能超过 100 个字符"
+		} else {
+			mutation.PublicSecurityRecordNumber = &value
 		}
 	}
 	if len(fields) > 0 {
